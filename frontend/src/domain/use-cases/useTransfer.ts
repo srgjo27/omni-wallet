@@ -1,0 +1,78 @@
+"use client";
+
+import { useState } from "react";
+import { v4 as uuidv4 } from "uuid";
+import { transferApi } from "@/infrastructure/api/transfer.api";
+import { ApiError } from "@/infrastructure/api/client";
+import type { Transaction } from "@/domain/models/transaction.types";
+import { useAuthStore } from "@/store/auth.store";
+
+/**
+ * Custom hook encapsulating top-up and P2P transfer logic.
+ * Generates reference_no automatically using UUID v4 to ensure idempotency.
+ */
+export function useTransfer() {
+  const { user } = useAuthStore();
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [lastTransaction, setLastTransaction] = useState<Transaction | null>(null);
+
+  const clearError = () => setError(null);
+
+  const topup = async (amount: number) => {
+    if (!user) return null;
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await transferApi.topup({
+        user_id: user.id,
+        amount,
+        reference_no: uuidv4(),
+        description: "Top-up via Virtual Account",
+      });
+      if (res.data) {
+        setLastTransaction(res.data);
+        return res.data;
+      }
+      return null;
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Top-up failed");
+      return null;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const transfer = async (
+    targetUserId: string,
+    amount: number,
+    pin: string,
+    description?: string,
+  ) => {
+    if (!user) return null;
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await transferApi.p2pTransfer({
+        source_user_id: user.id,
+        target_user_id: targetUserId,
+        amount,
+        reference_no: uuidv4(),
+        description: description ?? "P2P Transfer",
+        transaction_pin: pin,
+      });
+      if (res.data) {
+        setLastTransaction(res.data);
+        return res.data;
+      }
+      return null;
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Transfer failed");
+      return null;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return { isLoading, error, lastTransaction, topup, transfer, clearError };
+}

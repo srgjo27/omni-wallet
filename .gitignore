@@ -1,0 +1,80 @@
+# ============================================================
+# OmniWallet — .gitignore
+# ============================================================
+
+# ----- Agent / AI tools -----
+/.agents
+
+# ----- Environment / Secrets -----
+.env
+.env.local
+.env.*.local
+.env.production
+frontend/.env.local
+frontend/.env.production
+
+# ----- Go -----
+# Compiled binaries
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test output
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Go module download cache (not needed in repo, restored via go mod download)
+vendor/
+
+# ----- Next.js / Node.js -----
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.cache/
+frontend/build/
+
+# npm / yarn / pnpm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# Next.js telemetry
+frontend/.next/cache/
+
+# ----- Docker -----
+# Docker build context doesn't need these ignored,
+# but keep them out of git history
+*.tar
+*.tar.gz
+
+# ----- Database -----
+# Never commit real database dumps
+*.sql.bak
+*.dump
+
+# ----- IDE / Editor -----
+.vscode/settings.json
+.vscode/launch.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ----- OS -----
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db

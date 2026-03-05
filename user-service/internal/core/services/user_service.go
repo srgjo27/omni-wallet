@@ -1,0 +1,229 @@
+package services
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/omni-wallet/user-service/internal/core/domain"
+	"github.com/omni-wallet/user-service/internal/core/ports"
+)
+
+var (
+	ErrEmailAlreadyExists  = errors.New("email address is already registered")
+	ErrInvalidCredentials  = errors.New("invalid email or password")
+	ErrUserNotFound        = errors.New("user not found")
+	ErrPinMismatch         = errors.New("pin and confirm_pin do not match")
+	ErrPinNotSet           = errors.New("transaction pin has not been set")
+)
+
+type jwtClaims struct {
+	UserID string `json:"user_id"`
+	Email  string `json:"email"`
+	jwt.RegisteredClaims
+}
+
+// UserService contains all business logic related to the User domain.
+// It depends only on the ports interfaces, never on concrete DB implementations.
+type UserService struct {
+	userRepo         ports.UserRepository
+	cacheRepo        ports.UserCacheRepository
+	walletProvisioner ports.WalletProvisioner
+	jwtSecret        string
+	jwtTTL           time.Duration
+}
+
+func NewUserService(
+	userRepo ports.UserRepository,
+	cacheRepo ports.UserCacheRepository,
+	walletProvisioner ports.WalletProvisioner,
+	jwtSecret string,
+	jwtTTL time.Duration,
+) *UserService {
+	return &UserService{
+		userRepo:         userRepo,
+		cacheRepo:        cacheRepo,
+		walletProvisioner: walletProvisioner,
+		jwtSecret:        jwtSecret,
+		jwtTTL:           jwtTTL,
+	}
+}
+
+// RegisterUser validates the request, hashes the password, persists the new user,
+// and returns the created entity. An event would be published here to trigger
+// Wallet Service to create the corresponding wallet.
+func (s *UserService) RegisterUser(ctx context.Context, req domain.RegisterRequest) (*domain.User, error) {
+	exists, err := s.userRepo.ExistsByEmail(ctx, req.Email)
+	if err != nil {
+		return nil, fmt.Errorf("checking email existence: %w", err)
+	}
+	if exists {
+		return nil, ErrEmailAlreadyExists
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, fmt.Errorf("hashing password: %w", err)
+	}
+
+	now := time.Now()
+	user := &domain.User{
+		ID:           uuid.New().String(),
+		Name:         req.Name,
+		Email:        req.Email,
+		PasswordHash: string(passwordHash),
+		KYCStatus:    domain.KYCStatusUnverified,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	created, err := s.userRepo.Create(ctx, user)
+	if err != nil {
+		return nil, fmt.Errorf("persisting new user: %w", err)
+	}
+
+	// Provision a zero-balance wallet for the new user by calling wallet-service.
+	// Non-fatal: log the error but do not roll back the user record — the wallet
+	// can be retried; the user account itself is valid.
+	if s.walletProvisioner != nil {
+		if wErr := s.walletProvisioner.ProvisionWallet(ctx, created.ID); wErr != nil {
+			fmt.Printf("[WARN] RegisterUser: failed to provision wallet for user_id=%s: %v\n", created.ID, wErr)
+		}
+	}
+
+	return created, nil
+}
+
+// ListUsers returns a paginated list of all registered users for admin views.
+func (s *UserService) ListUsers(ctx context.Context, page, pageSize int) ([]*domain.User, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	return s.userRepo.ListUsers(ctx, page, pageSize)
+}
+
+// Login validates credentials, generates a JWT, caches the session, and returns the token.
+func (s *UserService) Login(ctx context.Context, req domain.LoginRequest) (*domain.LoginResponse, error) {
+	user, err := s.userRepo.FindByEmail(ctx, req.Email)
+	if err != nil {
+		return nil, fmt.Errorf("finding user by email: %w", err)
+	}
+	if user == nil {
+		return nil, ErrInvalidCredentials
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+		return nil, ErrInvalidCredentials
+	}
+
+	token, err := s.generateJWT(user)
+	if err != nil {
+		return nil, fmt.Errorf("generating JWT: %w", err)
+	}
+
+	ttlSeconds := int64(s.jwtTTL.Seconds())
+	if err := s.cacheRepo.SetUserSession(ctx, user.ID, token, ttlSeconds); err != nil {
+		// Non-fatal: log but do not block login if Redis is momentarily unavailable.
+		// In production, this should be sent to a structured logger.
+		fmt.Printf("[WARN] failed to cache user session for user_id=%s: %v\n", user.ID, err)
+	}
+
+	return &domain.LoginResponse{
+		AccessToken: token,
+		TokenType:   "Bearer",
+		ExpiresIn:   ttlSeconds,
+		User:        user,
+	}, nil
+}
+
+func (s *UserService) GetProfile(ctx context.Context, userID string) (*domain.User, error) {
+	user, err := s.userRepo.FindByID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("finding user by id: %w", err)
+	}
+	if user == nil {
+		return nil, ErrUserNotFound
+	}
+	return user, nil
+}
+
+func (s *UserService) SetPin(ctx context.Context, userID string, req domain.SetPinRequest) error {
+	if req.Pin != req.ConfirmPin {
+		return ErrPinMismatch
+	}
+
+	pinHash, err := bcrypt.GenerateFromPassword([]byte(req.Pin), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("hashing pin: %w", err)
+	}
+
+	if err := s.userRepo.UpdatePin(ctx, userID, string(pinHash)); err != nil {
+		return fmt.Errorf("persisting pin: %w", err)
+	}
+
+	return nil
+}
+
+func (s *UserService) UpdateKYC(ctx context.Context, userID string, req domain.UpdateKYCRequest) error {
+	user, err := s.userRepo.FindByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("finding user: %w", err)
+	}
+	if user == nil {
+		return ErrUserNotFound
+	}
+
+	if err := s.userRepo.UpdateKYCStatus(ctx, userID, domain.KYCStatusPending); err != nil {
+		return fmt.Errorf("updating kyc status: %w", err)
+	}
+
+	return nil
+}
+
+func (s *UserService) Logout(ctx context.Context, userID string) error {
+	if err := s.cacheRepo.DeleteUserSession(ctx, userID); err != nil {
+		return fmt.Errorf("deleting user session: %w", err)
+	}
+	return nil
+}
+
+func (s *UserService) VerifyToken(tokenString string) (*jwtClaims, error) {
+	claims := &jwtClaims{}
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		return []byte(s.jwtSecret), nil
+	})
+
+	if err != nil || !token.Valid {
+		return nil, fmt.Errorf("invalid or expired token")
+	}
+
+	return claims, nil
+}
+
+func (s *UserService) generateJWT(user *domain.User) (string, error) {
+	now := time.Now()
+	claims := jwtClaims{
+		UserID: user.ID,
+		Email:  user.Email,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   user.ID,
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(s.jwtTTL)),
+			Issuer:    "omni-wallet/user-service",
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(s.jwtSecret))
+}

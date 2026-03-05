@@ -1,0 +1,331 @@
+# ============================================================
+# OmniWallet — Docker Compose (Testing / Local Development)
+# Services: MySQL 8, Redis 7, RabbitMQ 3, user-service,
+#           wallet-service, api-gateway, notification-worker
+#
+# Usage:
+#   docker compose up --build             # start all services
+#   docker compose down -v               # stop and remove volumes
+#   docker compose logs -f api-gateway   # tail gateway logs
+#   docker compose logs -f notification-worker
+# ============================================================
+
+services:
+
+  # ----------------------------------------------------------
+  # MySQL 8.0 — primary relational database
+  # ----------------------------------------------------------
+  mysql:
+    image: mysql:8.0
+    container_name: omni_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: omni_wallet_users
+      MYSQL_USER: omni_user
+      MYSQL_PASSWORD: omni_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      # Creates both service databases (omni_wallet_users + omni_wallet_wallets)
+      # and grants the shared user access to them on first boot.
+      - ./db/init.sql:/docker-entrypoint-initdb.d/00_init.sql:ro
+    healthcheck:
+      # Verify that MySQL is accepting connections before dependent services start.
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot_password"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - omni_network
+
+  # ----------------------------------------------------------
+  # Redis 7 — session store & idempotency cache
+  # ----------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: omni_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - omni_network
+
+  # ----------------------------------------------------------
+  # RabbitMQ 3 — message broker for async event publishing
+  # Management UI available at http://localhost:15672
+  # Default credentials: omni_user / omni_password
+  # ----------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: omni_rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: omni_user
+      RABBITMQ_DEFAULT_PASS: omni_password
+    ports:
+      - "5672:5672"    # AMQP protocol
+      - "15672:15672"  # Management web UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - omni_network
+
+  # ----------------------------------------------------------
+  # db-migrate — one-shot service that applies SQL migrations.
+  # Runs once after MySQL is healthy, then exits (restart: no).
+  # ----------------------------------------------------------
+  db-migrate:
+    image: mysql:8.0
+    container_name: omni_db_migrate
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - ./user-service/db/migrations:/migrations:ro
+    # Run every .sql file in /migrations against the target database.
+    command: >
+      bash -c "
+        echo '[migrate] Applying migrations...' &&
+        for f in /migrations/*.sql; do
+          echo \"[migrate] Running: $$f\" &&
+          mysql -h mysql -u omni_user -pomni_password omni_wallet_users < $$f &&
+          echo \"[migrate] OK: $$f\"
+        done &&
+        echo '[migrate] All migrations applied successfully.'
+      "
+    networks:
+      - omni_network
+
+  # ----------------------------------------------------------
+  # user-service — User Service (Go/Gin)
+  # Built from ./user-service/Dockerfile (multi-stage, scratch).
+  # Restarts on failure to handle any transient startup races.
+  # ----------------------------------------------------------
+  user-service:
+    build:
+      context: ./user-service
+      dockerfile: Dockerfile
+    container_name: omni_user_service
+    restart: on-failure
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8081:8081"
+    environment:
+      APP_NAME: user-service
+      APP_PORT: "8081"
+      APP_ENV: development
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_USER: omni_user
+      DB_PASSWORD: omni_password
+      DB_NAME: omni_wallet_users
+      DB_MAX_OPEN_CONNS: "25"
+      DB_MAX_IDLE_CONNS: "5"
+      DB_CONN_MAX_LIFETIME: "5m"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ""
+      REDIS_DB: "0"
+      # Use a long random secret in real environments: openssl rand -hex 32
+      JWT_SECRET: "dev-only-secret-replace-in-production-min-32-chars!!"
+      JWT_TTL: "24h"
+      # Internal URL of the Wallet Service for provisioning wallets on registration.
+      WALLET_SERVICE_BASE_URL: "http://wallet-service:8082"
+    networks:
+      - omni_network
+
+  # ----------------------------------------------------------
+  # db-migrate-wallet — applies wallet-service SQL migrations.
+  # Runs once after MySQL is healthy, then exits.
+  # ----------------------------------------------------------
+  db-migrate-wallet:
+    image: mysql:8.0
+    container_name: omni_db_migrate_wallet
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - ./wallet-service/db/migrations:/migrations:ro
+    command: >
+      bash -c "
+        echo '[migrate-wallet] Applying migrations...' &&
+        for f in /migrations/*.sql; do
+          echo \"[migrate-wallet] Running: $$f\" &&
+          mysql -h mysql -u omni_user -pomni_password omni_wallet_wallets < $$f &&
+          echo \"[migrate-wallet] OK: $$f\"
+        done &&
+        echo '[migrate-wallet] All migrations applied successfully.'
+      "
+    networks:
+      - omni_network
+
+  # ----------------------------------------------------------
+  # wallet-service — Core Ledger (Go/Gin)
+  # Handles top-up, P2P transfer, and mutation history.
+  # ----------------------------------------------------------
+  wallet-service:
+    build:
+      context: ./wallet-service
+      dockerfile: Dockerfile
+    container_name: omni_wallet_service
+    restart: on-failure
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate-wallet:
+        condition: service_completed_successfully
+      user-service:
+        condition: service_started
+    ports:
+      - "8082:8082"
+    environment:
+      APP_NAME: wallet-service
+      APP_PORT: "8082"
+      APP_ENV: development
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_USER: omni_user
+      DB_PASSWORD: omni_password
+      DB_NAME: omni_wallet_wallets
+      DB_MAX_OPEN_CONNS: "25"
+      DB_MAX_IDLE_CONNS: "5"
+      DB_CONN_MAX_LIFETIME: "5m"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ""
+      REDIS_DB: "0"
+      # Must match the JWT_SECRET of the User Service to verify tokens.
+      JWT_SECRET: "dev-only-secret-replace-in-production-min-32-chars!!"
+      # Internal URL of the User Service for PIN verification.
+      USER_SERVICE_BASE_URL: "http://user-service:8081"
+      # RabbitMQ — event publishing after successful transactions.
+      RABBITMQ_URL: "amqp://omni_user:omni_password@rabbitmq:5672/"
+      RABBITMQ_EXCHANGE: omni.events
+    networks:
+      - omni_network
+
+  # ----------------------------------------------------------
+  # api-gateway — single entry point for all client requests.
+  # Handles JWT verification and IP-based rate limiting.
+  # Routes: /api/v1/users/* → user-service:8081
+  #         /api/v1/wallets/* + /api/v1/transfers/* → wallet-service:8082
+  # ----------------------------------------------------------
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: omni_api_gateway
+    restart: on-failure
+    depends_on:
+      user-service:
+        condition: service_started
+      wallet-service:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      APP_NAME: api-gateway
+      APP_PORT: "8080"
+      APP_ENV: development
+      JWT_SECRET: "dev-only-secret-replace-in-production-min-32-chars!!"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ""
+      REDIS_DB: "0"
+      USER_SERVICE_URL: "http://user-service:8081"
+      WALLET_SERVICE_URL: "http://wallet-service:8082"
+      RATE_LIMIT_REQUESTS: "60"
+      RATE_LIMIT_WINDOW_SECONDS: "60"
+    networks:
+      - omni_network
+
+  # ----------------------------------------------------------
+  # notification-worker — async RabbitMQ consumer.
+  # Processes TOPUP_SUCCESS / TRANSFER_SUCCESS events and
+  # simulates push notifications (logs to stdout).
+  # ----------------------------------------------------------
+  notification-worker:
+    build:
+      context: ./notification-worker
+      dockerfile: Dockerfile
+    container_name: omni_notification_worker
+    restart: on-failure
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      APP_NAME: notification-worker
+      APP_ENV: development
+      RABBITMQ_URL: "amqp://omni_user:omni_password@rabbitmq:5672/"
+      RABBITMQ_EXCHANGE: omni.events
+      RABBITMQ_QUEUE: notification.worker.queue
+      RABBITMQ_ROUTING_KEY: "transaction.#"
+      RABBITMQ_PREFETCH_COUNT: "10"
+    networks:
+      - omni_network
+
+  # ----------------------------------------------------------
+  # Frontend — Next.js 15 (App Router) on port 3000
+  # Proxies /api/* to the api-gateway service.
+  # ----------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://api-gateway:8080
+    container_name: omni_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://api-gateway:8080
+    depends_on:
+      - api-gateway
+    networks:
+      - omni_network
+
+# ----------------------------------------------------------
+# Named volumes — data persists across container restarts.
+# Run `docker compose down -v` to wipe them.
+# ----------------------------------------------------------
+volumes:
+  mysql_data:
+  redis_data:
+  rabbitmq_data:
+
+# ----------------------------------------------------------
+# Internal bridge network — services communicate by name.
+# ----------------------------------------------------------
+networks:
+  omni_network:
+    driver: bridge
