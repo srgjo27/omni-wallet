@@ -25,16 +25,12 @@ func NewTxProvider(db *sqlx.DB) *TxProvider {
 	return &TxProvider{db: db}
 }
 
-// ExecTx starts a MySQL transaction, runs fn inside it, and commits on success
-// or rolls back on any error returned by fn. This satisfies ports.TxProvider.
 func (p *TxProvider) ExecTx(ctx context.Context, fn func(ctx context.Context) error) error {
 	tx, err := p.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 
-	// Inject the active *sqlx.Tx into the context so that repository calls made
-	// inside fn automatically operate on the same transaction.
 	txCtx := context.WithValue(ctx, txContextKey{}, tx)
 
 	if err := fn(txCtx); err != nil {
@@ -50,9 +46,6 @@ func (p *TxProvider) ExecTx(ctx context.Context, fn func(ctx context.Context) er
 	return nil
 }
 
-// extractDB returns the *sqlx.Tx stored in ctx (if inside ExecTx), otherwise
-// falls back to the regular connection pool. All repository methods call this
-// to correctly participate in the active transaction when one is in progress.
 func extractDB(ctx context.Context, fallback *sqlx.DB) dbCtx {
 	if tx, ok := ctx.Value(txContextKey{}).(*sqlx.Tx); ok && tx != nil {
 		return tx

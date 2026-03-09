@@ -15,17 +15,9 @@ import (
 )
 
 const (
-	// distributedLockTTL defines how long a wallet lock is held before auto-expiry.
-	// This acts as a safety net in case the service crashes mid-transaction.
 	distributedLockTTL = 10 * time.Second
-
-	// idempotencyKeyTTL defines how long the cached result of a transaction is stored.
 	idempotencyKeyTTL = 24 * time.Hour
-
-	// idempotencyKeyPrefix is the Redis key namespace for idempotency values.
 	idempotencyKeyPrefix = "idempotency:"
-
-	// lockKeyPrefix is the Redis key namespace for distributed wallet locks.
 	lockKeyPrefix = "wallet_lock:"
 )
 
@@ -35,13 +27,9 @@ var (
 	ErrTransactionDuplicate  = errors.New("transaction with this reference_no already exists")
 	ErrInvalidPIN            = errors.New("invalid transaction PIN")
 	ErrLockAcquireFailed     = errors.New("could not acquire wallet lock, please try again")
+	ErrTargetUserNotFound    = errors.New("target user not found")
 )
 
-// TransferService handles all money-movement operations: top-up and P2P transfer.
-// It enforces:
-//  1. Idempotency  — duplicate reference_no returns the cached result without reprocessing.
-//  2. Distributed Lock — wallet balance is protected by a Redis mutex before modification.
-//  3. ACID transaction — all DB mutations happen in a single MySQL transaction via TxProvider.
 type TransferService struct {
 	walletRepo    ports.WalletRepository
 	txRepo        ports.TransactionRepository
@@ -50,7 +38,6 @@ type TransferService struct {
 	lockRepo      ports.DistributedLockRepository
 	idempotency   ports.IdempotencyRepository
 	userClient    ports.UserServiceClient
-	// eventPublisher is optional — when nil, event publishing is skipped.
 	eventPublisher ports.EventPublisher
 }
 
@@ -76,8 +63,6 @@ func NewTransferService(
 	}
 }
 
-// Topup credits the wallet of the given user. It is called from the mock
-// Virtual Account webhook and is fully idempotent.
 func (s *TransferService) Topup(ctx context.Context, req domain.TopupRequest) (*domain.Transaction, error) {
 	idempotencyKey := idempotencyKeyPrefix + req.ReferenceNo
 	cached, err := s.idempotency.Get(ctx, idempotencyKey)
@@ -110,7 +95,7 @@ func (s *TransferService) Topup(ctx context.Context, req domain.TopupRequest) (*
 	if !acquired {
 		return nil, ErrLockAcquireFailed
 	}
-	defer s.lockRepo.Release(ctx, lockKey) //nolint:errcheck
+	defer s.lockRepo.Release(ctx, lockKey)
 
 	now := time.Now()
 	txRecord := &domain.Transaction{
@@ -177,10 +162,13 @@ func (s *TransferService) Topup(ctx context.Context, req domain.TopupRequest) (*
 	return createdTx, nil
 }
 
-// Transfer executes a P2P transfer between two user wallets.
-// It acquires distributed locks on BOTH wallets (in a deterministic order to prevent
-// deadlocks), validates the source balance, and commits all mutations atomically.
 func (s *TransferService) Transfer(ctx context.Context, req domain.TransferRequest) (*domain.Transaction, error) {
+	targetUserID, err := s.userClient.FindUserIDByEmail(req.TargetEmail)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrTargetUserNotFound, err.Error())
+	}
+	req.TargetUserID = targetUserID
+
 	if req.SourceUserID == req.TargetUserID {
 		return nil, ErrSameWallet
 	}
@@ -223,9 +211,6 @@ func (s *TransferService) Transfer(ctx context.Context, req domain.TransferReque
 		return nil, fmt.Errorf("target wallet: %w", ErrWalletFrozen)
 	}
 
-	// Acquire distributed locks in deterministic order
-	// Sorting by wallet ID before locking prevents deadlocks when two concurrent transfers
-	// involve the same pair of wallets in opposite directions.
 	lockKeys := []string{lockKeyPrefix + sourceWallet.ID, lockKeyPrefix + targetWallet.ID}
 	sort.Strings(lockKeys)
 
@@ -240,7 +225,7 @@ func (s *TransferService) Transfer(ctx context.Context, req domain.TransferReque
 	}
 	defer func() {
 		for _, key := range lockKeys {
-			s.lockRepo.Release(ctx, key) //nolint:errcheck
+			s.lockRepo.Release(ctx, key)
 		}
 	}()
 
@@ -339,8 +324,6 @@ func (s *TransferService) Transfer(ctx context.Context, req domain.TransferReque
 	return createdTx, nil
 }
 
-// cacheTransaction serialises a transaction and stores it under the idempotency key.
-// Failures here are non-fatal since the DB is already consistent.
 func (s *TransferService) cacheTransaction(ctx context.Context, key string, tx *domain.Transaction) {
 	data, err := json.Marshal(tx)
 	if err != nil {
@@ -349,14 +332,11 @@ func (s *TransferService) cacheTransaction(ctx context.Context, key string, tx *
 	_ = s.idempotency.Set(ctx, key, string(data), idempotencyKeyTTL)
 }
 
-// publishEvent sends an outbound event to the message broker.
-// Failures are logged but not propagated — the transaction is already committed.
 func (s *TransferService) publishEvent(ctx context.Context, event domain.OutboundEvent) {
 	if s.eventPublisher == nil {
 		return
 	}
 	if err := s.eventPublisher.Publish(ctx, event); err != nil {
-		// Use log directly to avoid an import cycle; in production use a structured logger.
 		fmt.Printf("[transfer-service] WARNING: failed to publish event %s: %v\n", event.EventType, err)
 	}
 }

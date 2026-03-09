@@ -4,7 +4,7 @@
 #           wallet-service, api-gateway, notification-worker
 #
 # Usage:
-#   docker compose up --build             # start all services
+#   docker compose up --build            # start all services
 #   docker compose down -v               # stop and remove volumes
 #   docker compose logs -f api-gateway   # tail gateway logs
 #   docker compose logs -f notification-worker
@@ -19,11 +19,7 @@ services:
     image: mysql:8.0
     container_name: omni_mysql
     restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_DATABASE: omni_wallet_users
-      MYSQL_USER: omni_user
-      MYSQL_PASSWORD: omni_password
+    env_file: ./envs/mysql.env
     ports:
       - "3306:3306"
     volumes:
@@ -70,9 +66,7 @@ services:
     image: rabbitmq:3-management-alpine
     container_name: omni_rabbitmq
     restart: unless-stopped
-    environment:
-      RABBITMQ_DEFAULT_USER: omni_user
-      RABBITMQ_DEFAULT_PASS: omni_password
+    env_file: ./envs/rabbitmq.env
     ports:
       - "5672:5672"    # AMQP protocol
       - "15672:15672"  # Management web UI
@@ -102,8 +96,10 @@ services:
       - ./user-service/db/migrations:/migrations:ro
     # Run every .sql file in /migrations against the target database.
     command: >
-      bash -c "
-        echo '[migrate] Applying migrations...' &&
+      bash -c "        echo '[migrate] Waiting for MySQL to be fully ready...' &&
+        until mysql -h mysql -u omni_user -pomni_password omni_wallet_users -e 'SELECT 1' > /dev/null 2>&1; do
+          echo '[migrate] MySQL not ready yet, retrying in 3s...' && sleep 3;
+        done &&        echo '[migrate] Applying migrations...' &&
         for f in /migrations/*.sql; do
           echo \"[migrate] Running: $$f\" &&
           mysql -h mysql -u omni_user -pomni_password omni_wallet_users < $$f &&
@@ -134,27 +130,7 @@ services:
         condition: service_completed_successfully
     ports:
       - "8081:8081"
-    environment:
-      APP_NAME: user-service
-      APP_PORT: "8081"
-      APP_ENV: development
-      DB_HOST: mysql
-      DB_PORT: "3306"
-      DB_USER: omni_user
-      DB_PASSWORD: omni_password
-      DB_NAME: omni_wallet_users
-      DB_MAX_OPEN_CONNS: "25"
-      DB_MAX_IDLE_CONNS: "5"
-      DB_CONN_MAX_LIFETIME: "5m"
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
-      REDIS_PASSWORD: ""
-      REDIS_DB: "0"
-      # Use a long random secret in real environments: openssl rand -hex 32
-      JWT_SECRET: "dev-only-secret-replace-in-production-min-32-chars!!"
-      JWT_TTL: "24h"
-      # Internal URL of the Wallet Service for provisioning wallets on registration.
-      WALLET_SERVICE_BASE_URL: "http://wallet-service:8082"
+    env_file: ./envs/user-service.env
     networks:
       - omni_network
 
@@ -172,8 +148,10 @@ services:
     volumes:
       - ./wallet-service/db/migrations:/migrations:ro
     command: >
-      bash -c "
-        echo '[migrate-wallet] Applying migrations...' &&
+      bash -c "        echo '[migrate-wallet] Waiting for MySQL to be fully ready...' &&
+        until mysql -h mysql -u omni_user -pomni_password omni_wallet_wallets -e 'SELECT 1' > /dev/null 2>&1; do
+          echo '[migrate-wallet] MySQL not ready yet, retrying in 3s...' && sleep 3;
+        done &&        echo '[migrate-wallet] Applying migrations...' &&
         for f in /migrations/*.sql; do
           echo \"[migrate-wallet] Running: $$f\" &&
           mysql -h mysql -u omni_user -pomni_password omni_wallet_wallets < $$f &&
@@ -205,29 +183,7 @@ services:
         condition: service_started
     ports:
       - "8082:8082"
-    environment:
-      APP_NAME: wallet-service
-      APP_PORT: "8082"
-      APP_ENV: development
-      DB_HOST: mysql
-      DB_PORT: "3306"
-      DB_USER: omni_user
-      DB_PASSWORD: omni_password
-      DB_NAME: omni_wallet_wallets
-      DB_MAX_OPEN_CONNS: "25"
-      DB_MAX_IDLE_CONNS: "5"
-      DB_CONN_MAX_LIFETIME: "5m"
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
-      REDIS_PASSWORD: ""
-      REDIS_DB: "0"
-      # Must match the JWT_SECRET of the User Service to verify tokens.
-      JWT_SECRET: "dev-only-secret-replace-in-production-min-32-chars!!"
-      # Internal URL of the User Service for PIN verification.
-      USER_SERVICE_BASE_URL: "http://user-service:8081"
-      # RabbitMQ — event publishing after successful transactions.
-      RABBITMQ_URL: "amqp://omni_user:omni_password@rabbitmq:5672/"
-      RABBITMQ_EXCHANGE: omni.events
+    env_file: ./envs/wallet-service.env
     networks:
       - omni_network
 
@@ -252,19 +208,7 @@ services:
         condition: service_healthy
     ports:
       - "8080:8080"
-    environment:
-      APP_NAME: api-gateway
-      APP_PORT: "8080"
-      APP_ENV: development
-      JWT_SECRET: "dev-only-secret-replace-in-production-min-32-chars!!"
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
-      REDIS_PASSWORD: ""
-      REDIS_DB: "0"
-      USER_SERVICE_URL: "http://user-service:8081"
-      WALLET_SERVICE_URL: "http://wallet-service:8082"
-      RATE_LIMIT_REQUESTS: "60"
-      RATE_LIMIT_WINDOW_SECONDS: "60"
+    env_file: ./envs/api-gateway.env
     networks:
       - omni_network
 
@@ -282,14 +226,7 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
-    environment:
-      APP_NAME: notification-worker
-      APP_ENV: development
-      RABBITMQ_URL: "amqp://omni_user:omni_password@rabbitmq:5672/"
-      RABBITMQ_EXCHANGE: omni.events
-      RABBITMQ_QUEUE: notification.worker.queue
-      RABBITMQ_ROUTING_KEY: "transaction.#"
-      RABBITMQ_PREFETCH_COUNT: "10"
+    env_file: ./envs/notification-worker.env
     networks:
       - omni_network
 
@@ -307,8 +244,7 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
-    environment:
-      NEXT_PUBLIC_API_URL: http://api-gateway:8080
+    env_file: ./envs/frontend.env
     depends_on:
       - api-gateway
     networks:

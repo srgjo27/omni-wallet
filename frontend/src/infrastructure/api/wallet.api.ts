@@ -22,4 +22,8 @@ export const walletApi = {
     apiClient.get<TransactionHistoryResponse>(
       `${WALLET_BASE}/transactions?page=${page}&page_size=${pageSize}`,
     ),
+
+  /** Admin: returns total successful transaction count and total volume. */
+  adminGetWalletStats: () =>
+    apiClient.get<{ total_transactions: number; total_volume: number }>(`${WALLET_BASE}/stats`),
 };

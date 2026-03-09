@@ -8,16 +8,12 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// jwtClaims defines the expected claims structure inside the JWT.
 type jwtClaims struct {
 	UserID string `json:"user_id"`
 	Email  string `json:"email"`
 	jwt.RegisteredClaims
 }
 
-// AuthMiddleware returns a Gin middleware that validates a Bearer JWT token.
-// On success it injects auth_user_id and auth_email into the request context
-// and forwards the original Authorization header to the upstream service.
 func AuthMiddleware(jwtSecret string) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		authHeader := ctx.GetHeader("Authorization")
@@ -46,8 +42,6 @@ func AuthMiddleware(jwtSecret string) gin.HandlerFunc {
 			return
 		}
 
-		// Inject verified identity into the context so upstream services
-		// can rely on these headers without re-verifying the token.
 		ctx.Set("auth_user_id", claims.UserID)
 		ctx.Set("auth_email", claims.Email)
 		ctx.Request.Header.Set("X-Auth-User-ID", claims.UserID)

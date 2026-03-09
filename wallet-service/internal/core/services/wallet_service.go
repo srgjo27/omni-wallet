@@ -18,8 +18,6 @@ var (
 	ErrWalletFrozen        = errors.New("wallet is frozen and cannot be used")
 )
 
-// WalletService handles operations that do NOT move money between wallets:
-// creating wallets, reading balances, and listing mutations.
 type WalletService struct {
 	walletRepo   ports.WalletRepository
 	mutationRepo ports.MutationRepository
@@ -38,8 +36,6 @@ func NewWalletService(
 	}
 }
 
-// CreateWallet opens a new wallet with zero balance for the given user.
-// This is typically called right after a user registers.
 func (s *WalletService) CreateWallet(ctx context.Context, req domain.CreateWalletRequest) (*domain.Wallet, error) {
 	existing, err := s.walletRepo.FindByUserID(ctx, req.UserID)
 	if err != nil {
@@ -65,6 +61,10 @@ func (s *WalletService) CreateWallet(ctx context.Context, req domain.CreateWalle
 	}
 
 	return created, nil
+}
+
+func (s *WalletService) AdminGetStats(ctx context.Context) (totalTx int, totalVolume int64, err error) {
+	return s.txRepo.GetAdminStats(ctx)
 }
 
 func (s *WalletService) GetBalance(ctx context.Context, userID string) (*domain.BalanceResponse, error) {

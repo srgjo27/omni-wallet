@@ -14,6 +14,7 @@ import (
 	wallethttp "github.com/omni-wallet/wallet-service/internal/adapter/handler/http"
 	"github.com/omni-wallet/wallet-service/internal/adapter/httpclient"
 	rabbitmqpub "github.com/omni-wallet/wallet-service/internal/adapter/messaging/rabbitmq"
+	xenditpay "github.com/omni-wallet/wallet-service/internal/adapter/payment/xendit"
 	mysqlrepo "github.com/omni-wallet/wallet-service/internal/adapter/repository/mysql"
 	redisrepo "github.com/omni-wallet/wallet-service/internal/adapter/repository/redis"
 	"github.com/omni-wallet/wallet-service/internal/core/ports"
@@ -83,13 +84,36 @@ func main() {
 		eventPublisher,
 	)
 
-	walletHandler := wallethttp.NewWalletHandler(walletService, transferService, cfg.JWT.Secret)
+	var paymentService *services.PaymentService
+	if cfg.Xendit.Enabled {
+		xenditClient := xenditpay.NewClient(
+			cfg.Xendit.SecretKey,
+			cfg.Xendit.WebhookToken,
+			cfg.Xendit.CallbackURL,
+		)
+		paymentService = services.NewPaymentService(
+			xenditClient,
+			idempotencyRepo,
+			walletRepo,
+			txRepo,
+			mutationRepo,
+			txProvider,
+			eventPublisher,
+		)
+		log.Println("[INFO] Xendit payment gateway enabled")
+	} else {
+		log.Println("[INFO] Xendit payment gateway disabled (XENDIT_SECRET_KEY not set)")
+	}
+
+	walletHandler := wallethttp.NewWalletHandler(walletService, transferService, paymentService, cfg.JWT.Secret)
 
 	if cfg.App.Env == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
 	router := gin.New()
+	router.RedirectTrailingSlash = false
+	router.RedirectFixedPath = false
 	router.Use(gin.Logger())
 	router.Use(gin.Recovery())
 

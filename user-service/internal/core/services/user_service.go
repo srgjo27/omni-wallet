@@ -28,8 +28,6 @@ type jwtClaims struct {
 	jwt.RegisteredClaims
 }
 
-// UserService contains all business logic related to the User domain.
-// It depends only on the ports interfaces, never on concrete DB implementations.
 type UserService struct {
 	userRepo         ports.UserRepository
 	cacheRepo        ports.UserCacheRepository
@@ -54,9 +52,6 @@ func NewUserService(
 	}
 }
 
-// RegisterUser validates the request, hashes the password, persists the new user,
-// and returns the created entity. An event would be published here to trigger
-// Wallet Service to create the corresponding wallet.
 func (s *UserService) RegisterUser(ctx context.Context, req domain.RegisterRequest) (*domain.User, error) {
 	exists, err := s.userRepo.ExistsByEmail(ctx, req.Email)
 	if err != nil {
@@ -87,9 +82,6 @@ func (s *UserService) RegisterUser(ctx context.Context, req domain.RegisterReque
 		return nil, fmt.Errorf("persisting new user: %w", err)
 	}
 
-	// Provision a zero-balance wallet for the new user by calling wallet-service.
-	// Non-fatal: log the error but do not roll back the user record — the wallet
-	// can be retried; the user account itself is valid.
 	if s.walletProvisioner != nil {
 		if wErr := s.walletProvisioner.ProvisionWallet(ctx, created.ID); wErr != nil {
 			fmt.Printf("[WARN] RegisterUser: failed to provision wallet for user_id=%s: %v\n", created.ID, wErr)
@@ -99,7 +91,6 @@ func (s *UserService) RegisterUser(ctx context.Context, req domain.RegisterReque
 	return created, nil
 }
 
-// ListUsers returns a paginated list of all registered users for admin views.
 func (s *UserService) ListUsers(ctx context.Context, page, pageSize int) ([]*domain.User, int, error) {
 	if page < 1 {
 		page = 1
@@ -110,7 +101,6 @@ func (s *UserService) ListUsers(ctx context.Context, page, pageSize int) ([]*dom
 	return s.userRepo.ListUsers(ctx, page, pageSize)
 }
 
-// Login validates credentials, generates a JWT, caches the session, and returns the token.
 func (s *UserService) Login(ctx context.Context, req domain.LoginRequest) (*domain.LoginResponse, error) {
 	user, err := s.userRepo.FindByEmail(ctx, req.Email)
 	if err != nil {
@@ -131,10 +121,10 @@ func (s *UserService) Login(ctx context.Context, req domain.LoginRequest) (*doma
 
 	ttlSeconds := int64(s.jwtTTL.Seconds())
 	if err := s.cacheRepo.SetUserSession(ctx, user.ID, token, ttlSeconds); err != nil {
-		// Non-fatal: log but do not block login if Redis is momentarily unavailable.
-		// In production, this should be sent to a structured logger.
 		fmt.Printf("[WARN] failed to cache user session for user_id=%s: %v\n", user.ID, err)
 	}
+
+	user.HasPIN = user.PinHash != ""
 
 	return &domain.LoginResponse{
 		AccessToken: token,
@@ -152,6 +142,7 @@ func (s *UserService) GetProfile(ctx context.Context, userID string) (*domain.Us
 	if user == nil {
 		return nil, ErrUserNotFound
 	}
+	user.HasPIN = user.PinHash != ""
 	return user, nil
 }
 
@@ -185,6 +176,52 @@ func (s *UserService) UpdateKYC(ctx context.Context, userID string, req domain.U
 		return fmt.Errorf("updating kyc status: %w", err)
 	}
 
+	return nil
+}
+
+func (s *UserService) VerifyPIN(ctx context.Context, userID string, pin string) error {
+	user, err := s.userRepo.FindByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("finding user: %w", err)
+	}
+	if user == nil {
+		return ErrUserNotFound
+	}
+	if user.PinHash == "" {
+		return ErrPinNotSet
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PinHash), []byte(pin)); err != nil {
+		return ErrInvalidCredentials
+	}
+	return nil
+}
+
+func (s *UserService) AdminGetStats(ctx context.Context) (totalUsers, verifiedUsers int, err error) {
+	return s.userRepo.GetStats(ctx)
+}
+
+func (s *UserService) LookupByEmail(ctx context.Context, email string) (*domain.User, error) {
+	user, err := s.userRepo.FindByEmail(ctx, email)
+	if err != nil {
+		return nil, fmt.Errorf("finding user by email: %w", err)
+	}
+	if user == nil {
+		return nil, ErrUserNotFound
+	}
+	return user, nil
+}
+
+func (s *UserService) AdminVerifyKYC(ctx context.Context, userID string) error {
+	user, err := s.userRepo.FindByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("finding user: %w", err)
+	}
+	if user == nil {
+		return ErrUserNotFound
+	}
+	if err := s.userRepo.UpdateKYCStatus(ctx, userID, domain.KYCStatusVerified); err != nil {
+		return fmt.Errorf("updating kyc status to verified: %w", err)
+	}
 	return nil
 }
 

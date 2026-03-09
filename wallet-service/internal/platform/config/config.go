@@ -16,6 +16,7 @@ type Config struct {
 	JWT         JWTConfig
 	UserService UserServiceConfig
 	RabbitMQ    RabbitMQConfig
+	Xendit      XenditConfig
 }
 
 type AppConfig struct {
@@ -42,26 +43,27 @@ type RedisConfig struct {
 	DB       int
 }
 
-// JWTConfig holds JWT verification settings (secret is shared with User Service).
 type JWTConfig struct {
 	Secret string
 }
 
-// UserServiceConfig holds the base URL of the User Service for internal calls.
 type UserServiceConfig struct {
 	BaseURL string
 }
 
-// RabbitMQConfig holds AMQP connection settings for event publishing.
 type RabbitMQConfig struct {
 	URL          string
 	ExchangeName string
-	// Enabled controls whether event publishing is active.
-	// When false the wallet service runs without a broker dependency.
 	Enabled bool
 }
 
-// DSN builds the MySQL Data Source Name string.
+type XenditConfig struct {
+	SecretKey string
+	WebhookToken string
+	CallbackURL string
+	Enabled bool
+}
+
 func (d DatabaseConfig) DSN() string {
 	return fmt.Sprintf(
 		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local",
@@ -69,12 +71,10 @@ func (d DatabaseConfig) DSN() string {
 	)
 }
 
-// RedisAddr returns the Redis host:port address.
 func (r RedisConfig) RedisAddr() string {
 	return fmt.Sprintf("%s:%s", r.Host, r.Port)
 }
 
-// Load reads all configuration from environment variables.
 func Load() (*Config, error) {
 	_ = godotenv.Load()
 
@@ -127,6 +127,12 @@ func Load() (*Config, error) {
 			URL:          getEnvOrDefault("RABBITMQ_URL", ""),
 			ExchangeName: getEnvOrDefault("RABBITMQ_EXCHANGE", "omni.events"),
 			Enabled:      getEnvOrDefault("RABBITMQ_URL", "") != "",
+		},
+		Xendit: XenditConfig{
+			SecretKey:    getEnvOrDefault("XENDIT_SECRET_KEY", ""),
+			WebhookToken: getEnvOrDefault("XENDIT_WEBHOOK_TOKEN", ""),
+			CallbackURL:  getEnvOrDefault("XENDIT_CALLBACK_URL", ""),
+			Enabled:      getEnvOrDefault("XENDIT_SECRET_KEY", "") != "",
 		},
 	}, nil
 }

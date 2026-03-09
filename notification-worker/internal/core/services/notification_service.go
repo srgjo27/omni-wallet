@@ -8,8 +8,6 @@ import (
 	"github.com/omni-wallet/notification-worker/internal/core/ports"
 )
 
-// NotificationService orchestrates the receipt of transaction events and
-// dispatches them to the appropriate notification channels.
 type NotificationService struct {
 	consumer ports.EventConsumer
 	sender   ports.NotificationSender
@@ -22,8 +20,6 @@ func NewNotificationService(consumer ports.EventConsumer, sender ports.Notificat
 	}
 }
 
-// Run starts the event consumption loop.
-// It blocks until the consumer returns (connection closed or fatal error).
 func (s *NotificationService) Run() error {
 	log.Println("[notification-service] starting event consumption loop")
 
@@ -32,8 +28,6 @@ func (s *NotificationService) Run() error {
 			event.EventType, event.ReferenceNo, event.UserID, event.Amount)
 
 		if err := s.sender.Send(event); err != nil {
-			// Log the error but do NOT return it so the consumer ACKs the
-			// message and moves on. A dead-letter queue handles persistent failures.
 			log.Printf("[notification-service] WARNING: failed to send notification: %v", err)
 			return nil
 		}
@@ -42,8 +36,6 @@ func (s *NotificationService) Run() error {
 	})
 }
 
-// buildMessage creates a human-readable notification message for each event type.
-// Exported for testing purposes.
 func BuildMessage(event domain.TransactionEvent) string {
 	amountFormatted := fmt.Sprintf("Rp%.0f", float64(event.Amount)/100)
 

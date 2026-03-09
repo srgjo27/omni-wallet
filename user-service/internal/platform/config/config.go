@@ -9,8 +9,6 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// Config centralises all runtime configuration loaded from environment variables.
-// No secret or credential is ever hardcoded here.
 type Config struct {
 	App      AppConfig
 	Database DatabaseConfig
@@ -19,14 +17,12 @@ type Config struct {
 	Wallet   WalletConfig
 }
 
-// AppConfig holds general application settings.
 type AppConfig struct {
 	Name string
 	Port string
-	Env  string // "development" | "production"
+	Env  string
 }
 
-// DatabaseConfig holds MySQL connection settings.
 type DatabaseConfig struct {
 	Host            string
 	Port            string
@@ -38,7 +34,6 @@ type DatabaseConfig struct {
 	ConnMaxLifetime time.Duration
 }
 
-// RedisConfig holds Redis connection settings.
 type RedisConfig struct {
 	Host     string
 	Port     string
@@ -46,18 +41,15 @@ type RedisConfig struct {
 	DB       int
 }
 
-// JWTConfig holds JWT signing settings.
 type JWTConfig struct {
 	Secret string
-	TTL    time.Duration // e.g. 24h
+	TTL    time.Duration
 }
 
-// WalletConfig holds the URL used to call the wallet-service.
 type WalletConfig struct {
 	ServiceBaseURL string
 }
 
-// DSN builds the MySQL Data Source Name string.
 func (d DatabaseConfig) DSN() string {
 	return fmt.Sprintf(
 		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local",
@@ -65,15 +57,11 @@ func (d DatabaseConfig) DSN() string {
 	)
 }
 
-// RedisAddr returns the Redis host:port address.
 func (r RedisConfig) RedisAddr() string {
 	return fmt.Sprintf("%s:%s", r.Host, r.Port)
 }
 
-// Load reads configuration from environment variables. Call this once at startup.
-// It will also attempt to load a .env file if it exists (useful for local development).
 func Load() (*Config, error) {
-	// Best-effort load of .env file; ignored if not found (e.g. in production containers).
 	_ = godotenv.Load()
 
 	jwtTTL, err := time.ParseDuration(getEnvOrDefault("JWT_TTL", "24h"))
@@ -135,8 +123,6 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// mustGetEnv panics if the given environment variable is not set,
-// ensuring misconfigured deployments are caught immediately at startup.
 func mustGetEnv(key string) string {
 	value := os.Getenv(key)
 	if value == "" {
@@ -145,7 +131,6 @@ func mustGetEnv(key string) string {
 	return value
 }
 
-// getEnvOrDefault returns the value of the environment variable or a default.
 func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value

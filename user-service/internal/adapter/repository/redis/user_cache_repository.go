@@ -18,7 +18,6 @@ func NewUserCacheRepository(client *goredis.Client) *UserCacheRepository {
 	return &UserCacheRepository{client: client}
 }
 
-// SetUserSession stores the JWT token for the given user ID with a TTL.
 func (r *UserCacheRepository) SetUserSession(ctx context.Context, userID string, token string, ttlSeconds int64) error {
 	key := sessionKeyPrefix + userID
 	ttl := time.Duration(ttlSeconds) * time.Second
@@ -30,14 +29,13 @@ func (r *UserCacheRepository) SetUserSession(ctx context.Context, userID string,
 	return nil
 }
 
-// GetUserSession retrieves the cached JWT token for the given user ID.
 func (r *UserCacheRepository) GetUserSession(ctx context.Context, userID string) (string, error) {
 	key := sessionKeyPrefix + userID
 
 	token, err := r.client.Get(ctx, key).Result()
 	if err != nil {
 		if err == goredis.Nil {
-			return "", nil // session not found — not an error
+			return "", nil
 		}
 		return "", fmt.Errorf("getting user session from redis: %w", err)
 	}
@@ -45,7 +43,6 @@ func (r *UserCacheRepository) GetUserSession(ctx context.Context, userID string)
 	return token, nil
 }
 
-// DeleteUserSession removes the cached session for the given user ID (logout).
 func (r *UserCacheRepository) DeleteUserSession(ctx context.Context, userID string) error {
 	key := sessionKeyPrefix + userID
 

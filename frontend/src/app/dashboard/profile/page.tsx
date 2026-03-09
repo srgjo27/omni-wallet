@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useAuthStore } from "@/store/auth.store";
 import { useAuth } from "@/domain/use-cases/useAuth";
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -18,7 +19,7 @@ const kycBadge: Record<KycStatus, { variant: "success" | "warning" | "neutral"; 
 
 export default function ProfilePage() {
   const user = useAuthStore((s) => s.user);
-  const { setPin } = useAuth();
+  const { setPin, updateKyc } = useAuth();
 
   const [pin, setPin_]       = useState("");
   const [pinConf, setPinConf] = useState("");
@@ -26,9 +27,33 @@ export default function ProfilePage() {
   const [pinError, setPinError]   = useState<string | null>(null);
   const [pinSuccess, setPinSuccess] = useState<string | null>(null);
 
+  const [kycIdNumber, setKycIdNumber] = useState("");
+  const [kycFullName, setKycFullName] = useState("");
+  const [kycLoading, setKycLoading]   = useState(false);
+  const [kycError, setKycError]       = useState<string | null>(null);
+  const [kycSuccess, setKycSuccess]   = useState<string | null>(null);
+
   if (!user) return null;
 
   const kb = kycBadge[user.kyc_status];
+
+  const handleUpdateKyc = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (kycIdNumber.trim().length < 16) return setKycError("Nomor KTP harus 16 digit.");
+    if (kycFullName.trim().length < 3)  return setKycError("Nama lengkap terlalu pendek.");
+    setKycError(null);
+    setKycLoading(true);
+    try {
+      const ok = await updateKyc({ national_id: kycIdNumber.trim(), full_name: kycFullName.trim() });
+      if (ok) {
+        setKycSuccess("Pengajuan KYC berhasil dikirim. Status akan diperbarui setelah verifikasi.");
+        setKycIdNumber("");
+        setKycFullName("");
+      }
+    } finally {
+      setKycLoading(false);
+    }
+  };
 
   const handleSetPin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,16 +94,57 @@ export default function ProfilePage() {
             <dd><Badge variant={kb.variant}>{kb.label}</Badge></dd>
           </div>
           <div>
+            <dt className="text-gray-400">PIN Transaksi</dt>
+            <dd>
+              {user.has_pin
+                ? <Badge variant="success">Sudah dibuat</Badge>
+                : <Badge variant="neutral">Belum dibuat</Badge>}
+            </dd>
+          </div>
+          <div>
             <dt className="text-gray-400">Bergabung</dt>
             <dd className="font-medium text-gray-900">{formatDate(user.created_at)}</dd>
           </div>
         </dl>
       </Card>
 
+      {/* KYC Verification — only shown when status is UNVERIFIED */}
+      {user.kyc_status === "UNVERIFIED" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Verifikasi Identitas (KYC)</CardTitle>
+          </CardHeader>
+          <form onSubmit={handleUpdateKyc} className="flex flex-col gap-4 px-5 pb-5">
+            <p className="text-sm text-gray-500">
+              Ajukan data identitas Anda untuk meningkatkan limit transaksi.
+            </p>
+            <Input
+              label="Nomor KTP (16 digit)"
+              type="text"
+              value={kycIdNumber}
+              onChange={(e) => setKycIdNumber(e.target.value.replace(/\D/g, "").slice(0, 16))}
+              inputMode="numeric"
+              maxLength={16}
+              required
+            />
+            <Input
+              label="Nama Lengkap (sesuai KTP)"
+              type="text"
+              value={kycFullName}
+              onChange={(e) => setKycFullName(e.target.value)}
+              required
+            />
+            {kycError   && <p className="rounded-md bg-red-50   px-3 py-2 text-sm text-red-600"   role="alert">{kycError}</p>}
+            {kycSuccess && <p className="rounded-md bg-green-50 px-3 py-2 text-sm text-green-700" role="status">{kycSuccess}</p>}
+            <Button type="submit" isLoading={kycLoading} className="w-full">Ajukan KYC</Button>
+          </form>
+        </Card>
+      )}
+
       {/* Set PIN */}
       <Card>
         <CardHeader>
-          <CardTitle>Ubah PIN Transaksi</CardTitle>
+          <CardTitle>{user.has_pin ? "Ubah PIN Transaksi" : "Buat PIN Transaksi"}</CardTitle>
         </CardHeader>
         <form onSubmit={handleSetPin} className="flex flex-col gap-4 px-5 pb-5">
           <Input
@@ -101,7 +167,9 @@ export default function ProfilePage() {
           />
           {pinError   && <p className="rounded-md bg-red-50   px-3 py-2 text-sm text-red-600"   role="alert">{pinError}</p>}
           {pinSuccess && <p className="rounded-md bg-green-50 px-3 py-2 text-sm text-green-700" role="status">{pinSuccess}</p>}
-          <Button type="submit" isLoading={pinLoading} className="w-full">Simpan PIN</Button>
+          <Button type="submit" isLoading={pinLoading} className="w-full">
+            {user.has_pin ? "Simpan PIN" : "Buat PIN"}
+          </Button>
         </form>
       </Card>
     </div>

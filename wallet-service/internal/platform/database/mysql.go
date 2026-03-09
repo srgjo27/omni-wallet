@@ -9,7 +9,6 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
-// txKey is used to store an active *sqlx.Tx inside a context.Context.
 type txKey struct{}
 
 func NewMySQLConnection(dsn string, maxOpen, maxIdle int, connLifetime time.Duration) (*sqlx.DB, error) {

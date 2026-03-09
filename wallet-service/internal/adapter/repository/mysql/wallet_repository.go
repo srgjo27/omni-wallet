@@ -59,8 +59,6 @@ func (r *WalletRepository) FindByUserID(ctx context.Context, userID string) (*do
 	return &wallet, nil
 }
 
-// UpdateBalance sets the balance for the given wallet.
-// Calls within a TxProvider-managed context will run on the active transaction.
 func (r *WalletRepository) UpdateBalance(ctx context.Context, walletID string, newBalance int64) error {
 	db := extractDB(ctx, r.db)
 	result, err := db.ExecContext(ctx,

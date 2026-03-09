@@ -11,8 +11,6 @@ import (
 	"github.com/omni-wallet/user-service/internal/core/domain"
 )
 
-// UserRepository is the MySQL implementation of ports.UserRepository.
-// It interacts directly with the database and must never contain business logic.
 type UserRepository struct {
 	db *sqlx.DB
 }
@@ -126,4 +124,18 @@ func (r *UserRepository) ListUsers(ctx context.Context, page, pageSize int) ([]*
 	}
 
 	return users, total, nil
+}
+
+func (r *UserRepository) GetStats(ctx context.Context) (totalUsers, verifiedUsers int, err error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*),
+			SUM(CASE WHEN kyc_status = 'VERIFIED' THEN 1 ELSE 0 END)
+		FROM users
+	`)
+	var total, verified int
+	if err := row.Scan(&total, &verified); err != nil {
+		return 0, 0, fmt.Errorf("querying user stats: %w", err)
+	}
+	return total, verified, nil
 }

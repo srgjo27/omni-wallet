@@ -12,6 +12,8 @@
 .env.production
 frontend/.env.local
 frontend/.env.production
+# Per-service env files (contain secrets — never commit)
+envs/
 
 # ----- Go -----
 # Compiled binaries

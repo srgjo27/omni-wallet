@@ -7,6 +7,7 @@ export interface User {
   name: string;
   email: string;
   kyc_status: KycStatus;
+  has_pin: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -39,6 +40,6 @@ export interface SetPinRequest {
 
 /** PUT /api/v1/users/kyc */
 export interface UpdateKycRequest {
-  id_number: string;
+  national_id: string;
   full_name: string;
 }

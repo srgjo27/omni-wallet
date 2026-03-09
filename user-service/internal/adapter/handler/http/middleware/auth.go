@@ -14,8 +14,6 @@ const (
 	AuthEmailKey = "auth_email"
 )
 
-// AuthMiddleware validates the JWT Bearer token on protected routes.
-// It uses the UserService to verify the token, which keeps JWT logic in the service layer.
 func AuthMiddleware(userService *services.UserService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")

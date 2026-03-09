@@ -29,6 +29,14 @@ export const authApi = {
   updateKyc: (body: UpdateKycRequest) =>
     apiClient.put<null>(`${BASE}/kyc`, body),
 
+  /** Admin: sets a user's KYC status to VERIFIED. */
+  adminVerifyKyc: (userId: string) =>
+    apiClient.put<null>(`${BASE}/${userId}/kyc/verify`, {}),
+
+  /** Admin: returns total user count and KYC-verified count. */
+  adminGetUserStats: () =>
+    apiClient.get<{ total_users: number; verified_users: number }>(`${BASE}/stats`),
+
   /** Invalidates the current session token. */
   logout: () => apiClient.post<null>(`${BASE}/logout`, {}),
 };

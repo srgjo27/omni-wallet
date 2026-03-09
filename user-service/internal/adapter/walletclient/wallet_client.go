@@ -9,15 +9,11 @@ import (
 	"time"
 )
 
-// Client is an HTTP adapter that satisfies the ports.WalletProvisioner interface
-// by calling the wallet-service REST API.
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
 }
 
-// New returns a Client pointed at the given wallet-service base URL.
-// Example: New("http://wallet-service:8082")
 func New(baseURL string) *Client {
 	return &Client{
 		baseURL: baseURL,
@@ -37,8 +33,6 @@ type apiResponse struct {
 	Error   interface{} `json:"error,omitempty"`
 }
 
-// ProvisionWallet calls POST /api/v1/wallets on the wallet-service to create
-// an empty wallet for the newly registered user.
 func (c *Client) ProvisionWallet(ctx context.Context, userID string) error {
 	body, err := json.Marshal(createWalletRequest{UserID: userID})
 	if err != nil {

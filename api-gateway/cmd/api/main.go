@@ -40,6 +40,8 @@ func main() {
 	log.Println("[api-gateway] Redis connected")
 
 	engine := gin.New()
+	engine.RedirectTrailingSlash = false
+	engine.RedirectFixedPath = false
 	engine.Use(gin.Logger(), gin.Recovery())
 
 	engine.GET("/health", func(ctx *gin.Context) {

@@ -20,9 +20,6 @@ type jwtClaims struct {
 	jwt.RegisteredClaims
 }
 
-// AuthMiddleware validates the JWT Bearer token issued by the User Service.
-// The Wallet Service shares the same JWT secret so it can verify tokens locally
-// without an extra round-trip to the User Service.
 func AuthMiddleware(jwtSecret string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")

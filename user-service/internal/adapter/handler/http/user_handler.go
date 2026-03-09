@@ -14,8 +14,6 @@ import (
 	"github.com/omni-wallet/user-service/internal/core/services"
 )
 
-// UserHandler handles all HTTP requests related to user operations.
-// It validates input and delegates business logic to the service layer.
 type UserHandler struct {
 	userService *services.UserService
 	validate    *validator.Validate
@@ -30,36 +28,83 @@ func NewUserHandler(userService *services.UserService) *UserHandler {
 
 func (h *UserHandler) RegisterRoutes(router *gin.RouterGroup) {
 	users := router.Group("/users")
-	{
-		// Public routes — no authentication required.
-		users.POST("/register", h.Register)
-		users.POST("/login", h.Login)
+	auth := middleware.AuthMiddleware(h.userService)
 
-		// Protected routes — valid JWT required.
-		authorized := users.Group("/")
-		authorized.Use(middleware.AuthMiddleware(h.userService))
-		{
-			authorized.GET("/profile", h.GetProfile)
-			authorized.PUT("/pin", h.SetPin)
-			authorized.PUT("/kyc", h.UpdateKYC)
-			authorized.POST("/logout", h.Logout)
-			// Admin: list all registered users (paginated)
-			authorized.GET("", h.ListUsers)
-		}
-	}
+	users.POST("/register", h.Register)
+	users.POST("/login", h.Login)
+
+	internal := router.Group("/internal/users")
+	internal.POST("/verify-pin", h.InternalVerifyPIN)
+	internal.GET("/lookup", h.InternalLookupByEmail)
+
+	users.GET("/stats", auth, h.AdminGetStats)
+
+	users.GET("", auth, h.ListUsers)
+	users.GET("/", auth, h.ListUsers)
+
+	users.GET("/profile", auth, h.GetProfile)
+	users.PUT("/pin", auth, h.SetPin)
+	users.PUT("/kyc", auth, h.UpdateKYC)
+	users.POST("/logout", auth, h.Logout)
+
+	users.PUT("/:id/kyc/verify", auth, h.AdminVerifyKYC)
 }
 
-// Register godoc
-// @Summary      Register a new user
-// @Description  Creates a new user account and triggers wallet creation.
-// @Tags         users
-// @Accept       json
-// @Produce      json
-// @Param        body  body      domain.RegisterRequest  true  "Registration payload"
-// @Success      201   {object}  response.APIResponse
-// @Failure      400   {object}  response.APIResponse
-// @Failure      409   {object}  response.APIResponse
-// @Router       /users/register [post]
+func (h *UserHandler) AdminGetStats(c *gin.Context) {
+	total, verified, err := h.userService.AdminGetStats(c.Request.Context())
+	if err != nil {
+		log.Printf("[ERROR] AdminGetStats: %v", err)
+		response.InternalServerError(c, "failed to retrieve stats")
+		return
+	}
+	response.OK(c, "stats retrieved", gin.H{
+		"total_users":    total,
+		"verified_users": verified,
+	})
+}
+
+func (h *UserHandler) InternalLookupByEmail(c *gin.Context) {
+	email := c.Query("email")
+	if email == "" {
+		response.BadRequest(c, "email query parameter is required", nil)
+		return
+	}
+
+	user, err := h.userService.LookupByEmail(c.Request.Context(), email)
+	if err != nil {
+		if errors.Is(err, services.ErrUserNotFound) {
+			response.NotFound(c, "user not found")
+			return
+		}
+		response.InternalServerError(c, "lookup failed")
+		return
+	}
+
+	c.JSON(200, gin.H{"success": true, "data": gin.H{"user_id": user.ID, "name": user.Name}})
+}
+
+func (h *UserHandler) InternalVerifyPIN(c *gin.Context) {
+	var req struct {
+		UserID string `json:"user_id" binding:"required"`
+		PIN    string `json:"pin"    binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request body", err.Error())
+		return
+	}
+
+	if err := h.userService.VerifyPIN(c.Request.Context(), req.UserID, req.PIN); err != nil {
+		if errors.Is(err, services.ErrUserNotFound) {
+			response.NotFound(c, err.Error())
+			return
+		}
+		c.JSON(200, gin.H{"success": false, "message": "invalid transaction PIN"})
+		return
+	}
+
+	response.OK(c, "PIN verified", nil)
+}
+
 func (h *UserHandler) Register(c *gin.Context) {
 	var req domain.RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -86,17 +131,6 @@ func (h *UserHandler) Register(c *gin.Context) {
 	response.Created(c, "user registered successfully", user)
 }
 
-// Login godoc
-// @Summary      Authenticate a user
-// @Description  Validates credentials and returns a JWT access token.
-// @Tags         users
-// @Accept       json
-// @Produce      json
-// @Param        body  body      domain.LoginRequest  true  "Login credentials"
-// @Success      200   {object}  response.APIResponse
-// @Failure      400   {object}  response.APIResponse
-// @Failure      401   {object}  response.APIResponse
-// @Router       /users/login [post]
 func (h *UserHandler) Login(c *gin.Context) {
 	var req domain.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -123,17 +157,6 @@ func (h *UserHandler) Login(c *gin.Context) {
 	response.OK(c, "login successful", loginResp)
 }
 
-// ListUsers godoc
-// @Summary      List all registered users (admin)
-// @Description  Returns a paginated list of all users. Requires a valid JWT.
-// @Tags         users
-// @Security     BearerAuth
-// @Produce      json
-// @Param        page       query  int  false  "Page number (default: 1)"
-// @Param        page_size  query  int  false  "Items per page (default: 20, max: 100)"
-// @Success      200  {object}  response.APIResponse
-// @Failure      401  {object}  response.APIResponse
-// @Router       /users [get]
 func (h *UserHandler) ListUsers(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
@@ -153,16 +176,6 @@ func (h *UserHandler) ListUsers(c *gin.Context) {
 	})
 }
 
-// GetProfile godoc
-// @Summary      Get authenticated user profile
-// @Description  Returns the profile of the currently authenticated user.
-// @Tags         users
-// @Security     BearerAuth
-// @Produce      json
-// @Success      200  {object}  response.APIResponse
-// @Failure      401  {object}  response.APIResponse
-// @Failure      404  {object}  response.APIResponse
-// @Router       /users/profile [get]
 func (h *UserHandler) GetProfile(c *gin.Context) {
 	userID, _ := c.Get(middleware.AuthUserIDKey)
 
@@ -180,18 +193,6 @@ func (h *UserHandler) GetProfile(c *gin.Context) {
 	response.OK(c, "profile retrieved successfully", user)
 }
 
-// SetPin godoc
-// @Summary      Set or update the transaction PIN
-// @Description  Sets a 6-digit numeric transaction PIN for the authenticated user.
-// @Tags         users
-// @Security     BearerAuth
-// @Accept       json
-// @Produce      json
-// @Param        body  body      domain.SetPinRequest  true  "PIN payload"
-// @Success      200   {object}  response.APIResponse
-// @Failure      400   {object}  response.APIResponse
-// @Failure      401   {object}  response.APIResponse
-// @Router       /users/pin [put]
 func (h *UserHandler) SetPin(c *gin.Context) {
 	var req domain.SetPinRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -219,18 +220,6 @@ func (h *UserHandler) SetPin(c *gin.Context) {
 	response.OK(c, "transaction PIN set successfully", nil)
 }
 
-// UpdateKYC godoc
-// @Summary      Submit KYC information
-// @Description  Submits KYC documents for the authenticated user, setting status to PENDING.
-// @Tags         users
-// @Security     BearerAuth
-// @Accept       json
-// @Produce      json
-// @Param        body  body      domain.UpdateKYCRequest  true  "KYC payload"
-// @Success      200   {object}  response.APIResponse
-// @Failure      400   {object}  response.APIResponse
-// @Failure      401   {object}  response.APIResponse
-// @Router       /users/kyc [put]
 func (h *UserHandler) UpdateKYC(c *gin.Context) {
 	var req domain.UpdateKYCRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -258,15 +247,6 @@ func (h *UserHandler) UpdateKYC(c *gin.Context) {
 	response.OK(c, "KYC information submitted successfully", nil)
 }
 
-// Logout godoc
-// @Summary      Log out the authenticated user
-// @Description  Invalidates the user session in the cache.
-// @Tags         users
-// @Security     BearerAuth
-// @Produce      json
-// @Success      200  {object}  response.APIResponse
-// @Failure      401  {object}  response.APIResponse
-// @Router       /users/logout [post]
 func (h *UserHandler) Logout(c *gin.Context) {
 	userID, _ := c.Get(middleware.AuthUserIDKey)
 
@@ -279,7 +259,26 @@ func (h *UserHandler) Logout(c *gin.Context) {
 	response.OK(c, "logout successful", nil)
 }
 
-// formatValidationErrors converts validator.ValidationErrors into a map for a clear API response.
+func (h *UserHandler) AdminVerifyKYC(c *gin.Context) {
+	userID := c.Param("id")
+	if userID == "" {
+		response.BadRequest(c, "user id is required", nil)
+		return
+	}
+
+	if err := h.userService.AdminVerifyKYC(c.Request.Context(), userID); err != nil {
+		if errors.Is(err, services.ErrUserNotFound) {
+			response.NotFound(c, err.Error())
+			return
+		}
+		log.Printf("[ERROR] AdminVerifyKYC: %v", err)
+		response.InternalServerError(c, "failed to verify KYC")
+		return
+	}
+
+	response.OK(c, "KYC verified successfully", nil)
+}
+
 func formatValidationErrors(err error) map[string]string {
 	fieldErrors := make(map[string]string)
 
@@ -293,7 +292,6 @@ func formatValidationErrors(err error) map[string]string {
 	return fieldErrors
 }
 
-// buildValidationMessage produces a human-readable message for a single validation failure.
 func buildValidationMessage(fe validator.FieldError) string {
 	switch fe.Tag() {
 	case "required":

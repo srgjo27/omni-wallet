@@ -2,23 +2,26 @@ package http
 
 import (
 	"errors"
+	"fmt"
 	"log"
+	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
 
+	xenditpay "github.com/omni-wallet/wallet-service/internal/adapter/payment/xendit"
 	"github.com/omni-wallet/wallet-service/internal/adapter/handler/http/middleware"
 	"github.com/omni-wallet/wallet-service/internal/adapter/handler/http/response"
 	"github.com/omni-wallet/wallet-service/internal/core/domain"
 	"github.com/omni-wallet/wallet-service/internal/core/services"
 )
 
-// WalletHandler handles all HTTP requests for the Wallet Service.
-// It validates input and delegates business logic to the appropriate service.
 type WalletHandler struct {
 	walletService   *services.WalletService
 	transferService *services.TransferService
+	paymentService  *services.PaymentService
 	validate        *validator.Validate
 	jwtSecret       string
 }
@@ -26,24 +29,23 @@ type WalletHandler struct {
 func NewWalletHandler(
 	walletService *services.WalletService,
 	transferService *services.TransferService,
+	paymentService *services.PaymentService,
 	jwtSecret string,
 ) *WalletHandler {
 	return &WalletHandler{
 		walletService:   walletService,
 		transferService: transferService,
+		paymentService:  paymentService,
 		validate:        validator.New(),
 		jwtSecret:       jwtSecret,
 	}
 }
 
-// RegisterRoutes mounts all wallet-related routes onto the provided router group.
 func (h *WalletHandler) RegisterRoutes(router *gin.RouterGroup) {
 	auth := middleware.AuthMiddleware(h.jwtSecret)
 
 	wallets := router.Group("/wallets")
 	{
-		// This endpoint is called internally by the User Service after registration.
-		// In a production system it would be protected by an internal service token.
 		wallets.POST("", h.CreateWallet)
 
 		protected := wallets.Group("")
@@ -52,27 +54,40 @@ func (h *WalletHandler) RegisterRoutes(router *gin.RouterGroup) {
 			protected.GET("/balance", h.GetBalance)
 			protected.GET("/mutations", h.GetMutations)
 			protected.GET("/transactions", h.GetTransactionHistory)
+			protected.GET("/stats", h.AdminGetStats)
 		}
 	}
 
 	transfers := router.Group("/transfers")
 	transfers.Use(auth)
 	{
-		// Top-up is invoked by the mock VA webhook (no auth required in production,
-		// but we keep auth here for testing; a real webhook would use HMAC validation).
 		transfers.POST("/topup", h.Topup)
 		transfers.POST("/p2p", h.Transfer)
+		transfers.POST("/topup/va", h.RequestVA)
+	}
+
+	payments := router.Group("/payments/xendit")
+	{
+		payments.POST("/callback", h.XenditCallback)
+		if os.Getenv("APP_ENV") != "production" {
+			payments.POST("/simulate", auth, h.SimulateXenditPayment)
+		}
 	}
 }
 
-// CreateWallet godoc
-// @Summary      Create a wallet for an existing user
-// @Tags         wallets
-// @Accept       json
-// @Produce      json
-// @Param        body  body      domain.CreateWalletRequest  true  "Create Wallet payload"
-// @Success      201   {object}  response.APIResponse
-// @Router       /wallets [post]
+func (h *WalletHandler) AdminGetStats(c *gin.Context) {
+	totalTx, totalVolume, err := h.walletService.AdminGetStats(c.Request.Context())
+	if err != nil {
+		log.Printf("[ERROR] AdminGetStats: %v", err)
+		response.InternalServerError(c, "failed to retrieve stats")
+		return
+	}
+	response.OK(c, "stats retrieved", gin.H{
+		"total_transactions": totalTx,
+		"total_volume":       totalVolume,
+	})
+}
+
 func (h *WalletHandler) CreateWallet(c *gin.Context) {
 	var req domain.CreateWalletRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -98,13 +113,6 @@ func (h *WalletHandler) CreateWallet(c *gin.Context) {
 	response.Created(c, "wallet created successfully", wallet)
 }
 
-// GetBalance godoc
-// @Summary      Get the authenticated user's wallet balance
-// @Tags         wallets
-// @Security     BearerAuth
-// @Produce      json
-// @Success      200  {object}  response.APIResponse
-// @Router       /wallets/balance [get]
 func (h *WalletHandler) GetBalance(c *gin.Context) {
 	userID := c.GetString(middleware.AuthUserIDKey)
 
@@ -122,15 +130,6 @@ func (h *WalletHandler) GetBalance(c *gin.Context) {
 	response.OK(c, "balance retrieved successfully", balance)
 }
 
-// GetMutations godoc
-// @Summary      Get paginated wallet mutation (ledger) history
-// @Tags         wallets
-// @Security     BearerAuth
-// @Produce      json
-// @Param        page   query  int  false  "Page number (default: 1)"
-// @Param        limit  query  int  false  "Items per page (default: 20)"
-// @Success      200    {object}  response.APIResponse
-// @Router       /wallets/mutations [get]
 func (h *WalletHandler) GetMutations(c *gin.Context) {
 	userID := c.GetString(middleware.AuthUserIDKey)
 	page := queryIntOrDefault(c, "page", 1)
@@ -150,15 +149,6 @@ func (h *WalletHandler) GetMutations(c *gin.Context) {
 	response.OK(c, "mutations retrieved successfully", result)
 }
 
-// GetTransactionHistory godoc
-// @Summary      Get paginated transaction history
-// @Tags         wallets
-// @Security     BearerAuth
-// @Produce      json
-// @Param        page   query  int  false  "Page number (default: 1)"
-// @Param        limit  query  int  false  "Items per page (default: 20)"
-// @Success      200    {object}  response.APIResponse
-// @Router       /wallets/transactions [get]
 func (h *WalletHandler) GetTransactionHistory(c *gin.Context) {
 	userID := c.GetString(middleware.AuthUserIDKey)
 	page := queryIntOrDefault(c, "page", 1)
@@ -178,14 +168,101 @@ func (h *WalletHandler) GetTransactionHistory(c *gin.Context) {
 	response.OK(c, "transactions retrieved successfully", result)
 }
 
-// Topup godoc
-// @Summary      Top-up wallet via Virtual Account webhook
-// @Tags         transfers
-// @Accept       json
-// @Produce      json
-// @Param        body  body      domain.TopupRequest  true  "Top-up payload"
-// @Success      200   {object}  response.APIResponse
-// @Router       /transfers/topup [post]
+func (h *WalletHandler) RequestVA(c *gin.Context) {
+	if h.paymentService == nil {
+		response.BadRequest(c, "payment gateway not configured", nil)
+		return
+	}
+
+	var req domain.RequestVARequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request body", err.Error())
+		return
+	}
+	if err := h.validate.Struct(req); err != nil {
+		response.BadRequest(c, "validation failed", formatValidationErrors(err))
+		return
+	}
+
+	userID := c.GetString(middleware.AuthUserIDKey)
+	va, err := h.paymentService.GetOrCreateVA(c.Request.Context(), userID, req.Name, req.BankCode)
+	if err != nil {
+		log.Printf("[ERROR] RequestVA user=%s: %v", userID, err)
+
+		var xenditErr *xenditpay.APIError
+		if errors.As(err, &xenditErr) {
+			var msg string
+			switch xenditErr.Code {
+			case "REQUEST_FORBIDDEN_ERROR":
+				msg = "API key Xendit tidak memiliki izin untuk membuat Virtual Account. Periksa permission di dashboard Xendit."
+			case "DUPLICATE_CALLBACK_VIRTUAL_ACCOUNT":
+				msg = "Virtual Account sudah ada namun gagal dibaca dari cache. Coba lagi."
+			default:
+				msg = fmt.Sprintf("Payment gateway error [%s]: %s", xenditErr.Code, xenditErr.Message)
+			}
+			c.JSON(http.StatusBadGateway, gin.H{"success": false, "message": msg})
+			return
+		}
+
+		response.InternalServerError(c, "gagal membuat virtual account")
+		return
+	}
+
+	response.OK(c, "virtual account berhasil dibuat", va)
+}
+
+func (h *WalletHandler) XenditCallback(c *gin.Context) {
+	if h.paymentService == nil {
+		c.Status(200)
+		log.Println("[WARN] XenditCallback: payment service not configured, ignoring")
+		return
+	}
+
+	token := c.GetHeader("x-callback-token")
+	if !h.paymentService.Gateway().VerifyWebhookToken(token) {
+		log.Printf("[WARN] XenditCallback: invalid callback token")
+		c.JSON(401, gin.H{"message": "unauthorized"})
+		return
+	}
+
+	var payment domain.XenditVAPayment
+	if err := c.ShouldBindJSON(&payment); err != nil {
+		response.BadRequest(c, "invalid payload", err.Error())
+		return
+	}
+
+	tx, err := h.paymentService.ProcessXenditPayment(c.Request.Context(), payment)
+	if err != nil {
+		log.Printf("[ERROR] XenditCallback payment=%s: %v", payment.PaymentID, err)
+		response.InternalServerError(c, "payment processing failed")
+		return
+	}
+
+	response.OK(c, "payment processed", tx)
+}
+
+func (h *WalletHandler) SimulateXenditPayment(c *gin.Context) {
+	if h.paymentService == nil {
+		response.BadRequest(c, "payment service not configured", nil)
+		return
+	}
+
+	var payment domain.XenditVAPayment
+	if err := c.ShouldBindJSON(&payment); err != nil {
+		response.BadRequest(c, "invalid payload", err.Error())
+		return
+	}
+
+	tx, err := h.paymentService.ProcessXenditPayment(c.Request.Context(), payment)
+	if err != nil {
+		log.Printf("[ERROR] SimulateXenditPayment: %v", err)
+		response.InternalServerError(c, "simulation failed")
+		return
+	}
+
+	response.OK(c, "simulated payment processed", tx)
+}
+
 func (h *WalletHandler) Topup(c *gin.Context) {
 	var req domain.TopupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -216,15 +293,6 @@ func (h *WalletHandler) Topup(c *gin.Context) {
 	response.OK(c, "top-up successful", tx)
 }
 
-// Transfer godoc
-// @Summary      P2P transfer between two users
-// @Tags         transfers
-// @Security     BearerAuth
-// @Accept       json
-// @Produce      json
-// @Param        body  body      domain.TransferRequest  true  "Transfer payload"
-// @Success      200   {object}  response.APIResponse
-// @Router       /transfers/p2p [post]
 func (h *WalletHandler) Transfer(c *gin.Context) {
 	var req domain.TransferRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -236,7 +304,6 @@ func (h *WalletHandler) Transfer(c *gin.Context) {
 		return
 	}
 
-	// Enforce that the authenticated user is the one initiating the transfer.
 	authedUserID := c.GetString(middleware.AuthUserIDKey)
 	if req.SourceUserID != authedUserID {
 		response.Unauthorized(c, "source_user_id must match the authenticated user")
@@ -252,6 +319,8 @@ func (h *WalletHandler) Transfer(c *gin.Context) {
 			response.Unauthorized(c, err.Error())
 		case errors.Is(err, services.ErrSameWallet):
 			response.BadRequest(c, err.Error(), nil)
+		case errors.Is(err, services.ErrTargetUserNotFound):
+			response.NotFound(c, "target user not found")
 		case errors.Is(err, services.ErrWalletNotFound):
 			response.NotFound(c, err.Error())
 		case errors.Is(err, services.ErrWalletFrozen):
@@ -268,7 +337,6 @@ func (h *WalletHandler) Transfer(c *gin.Context) {
 	response.OK(c, "transfer successful", tx)
 }
 
-// formatValidationErrors converts validator.ValidationErrors to a human-readable map.
 func formatValidationErrors(err error) map[string]string {
 	fieldErrors := make(map[string]string)
 	var validationErrors validator.ValidationErrors
@@ -299,7 +367,6 @@ func buildValidationMessage(fe validator.FieldError) string {
 	}
 }
 
-// queryIntOrDefault parses a query parameter as int, returning defaultVal on failure.
 func queryIntOrDefault(c *gin.Context, key string, defaultVal int) int {
 	raw := c.Query(key)
 	if raw == "" {

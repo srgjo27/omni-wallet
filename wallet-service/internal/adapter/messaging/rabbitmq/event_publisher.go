@@ -18,8 +18,6 @@ const (
 	defaultRetryBaseDelay = 2 * time.Second
 )
 
-// EventPublisher publishes domain events to a RabbitMQ topic exchange.
-// It establishes a single persistent channel and reconnects on failure.
 type EventPublisher struct {
 	url          string
 	exchangeName string
@@ -28,8 +26,6 @@ type EventPublisher struct {
 	mu           sync.Mutex
 }
 
-// NewEventPublisher dials the broker, declares the exchange, and returns a
-// ready-to-use EventPublisher.
 func NewEventPublisher(url, exchangeName string) (*EventPublisher, error) {
 	p := &EventPublisher{
 		url:          url,
@@ -43,7 +39,6 @@ func NewEventPublisher(url, exchangeName string) (*EventPublisher, error) {
 	return p, nil
 }
 
-// connect dials the AMQP broker and creates a publishing channel with retry.
 func (p *EventPublisher) connect() error {
 	var lastErr error
 	delay := defaultRetryBaseDelay
@@ -58,14 +53,13 @@ func (p *EventPublisher) connect() error {
 				continue
 			}
 
-			// Declare a durable topic exchange.
 			if err := ch.ExchangeDeclare(
 				p.exchangeName,
 				"topic",
-				true,  // durable
-				false, // auto-delete
-				false, // internal
-				false, // no-wait
+				true, 
+				false, 
+				false,
+				false,
 				nil,
 			); err != nil {
 				ch.Close()
@@ -91,7 +85,6 @@ func (p *EventPublisher) connect() error {
 	return fmt.Errorf("failed to connect to RabbitMQ after %d attempts: %w", defaultDialRetries, lastErr)
 }
 
-// routingKey maps an event type to an AMQP topic routing key.
 func routingKey(eventType domain.OutboundEventType) string {
 	switch eventType {
 	case domain.OutboundEventTopupSuccess:
@@ -105,9 +98,6 @@ func routingKey(eventType domain.OutboundEventType) string {
 	}
 }
 
-// Publish serialises the event to JSON and publishes it to the exchange.
-// Uses a mutex to protect the channel for concurrent callers.
-// On channel-level errors it attempts to reconnect before returning.
 func (p *EventPublisher) Publish(ctx context.Context, event domain.OutboundEvent) error {
 	body, err := json.Marshal(event)
 	if err != nil {
@@ -116,7 +106,7 @@ func (p *EventPublisher) Publish(ctx context.Context, event domain.OutboundEvent
 
 	msg := amqp.Publishing{
 		ContentType:  "application/json",
-		DeliveryMode: amqp.Persistent, // survives broker restart
+		DeliveryMode: amqp.Persistent,
 		Timestamp:    time.Now(),
 		Body:         body,
 	}
@@ -128,11 +118,10 @@ func (p *EventPublisher) Publish(ctx context.Context, event domain.OutboundEvent
 
 	if err := p.channel.PublishWithContext(ctx,
 		p.exchangeName, key,
-		false, // mandatory
-		false, // immediate
+		false,
+		false,
 		msg,
 	); err != nil {
-		// Channel is broken — reconnect and retry once.
 		log.Printf("[rabbitmq-publisher] publish failed (%v) — reconnecting", err)
 		if reconnErr := p.connect(); reconnErr != nil {
 			return fmt.Errorf("reconnect failed: %w", reconnErr)

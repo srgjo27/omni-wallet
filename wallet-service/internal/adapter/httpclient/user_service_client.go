@@ -6,15 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
-// UserServiceClient is the HTTP adapter that implements ports.UserServiceClient.
-// It calls the User Service over internal HTTP for PIN verification and user existence checks.
 type UserServiceClient struct {
 	baseURL    string
 	httpClient *http.Client
-	jwtToken   string // static internal service-to-service token
+	jwtToken   string
 }
 
 func NewUserServiceClient(baseURL string) *UserServiceClient {
@@ -36,8 +35,6 @@ type verifyPINResponse struct {
 	Message string `json:"message"`
 }
 
-// VerifyPIN calls the User Service to validate the transaction PIN.
-// Returns nil if the PIN is correct, an error otherwise.
 func (c *UserServiceClient) VerifyPIN(userID string, pin string) error {
 	payload := verifyPINRequest{UserID: userID, PIN: pin}
 	body, err := json.Marshal(payload)
@@ -76,6 +73,38 @@ type existsResponse struct {
 	Data    struct {
 		Exists bool `json:"exists"`
 	} `json:"data"`
+}
+
+type lookupByEmailResponse struct {
+	Success bool `json:"success"`
+	Data    struct {
+		UserID string `json:"user_id"`
+		Name   string `json:"name"`
+	} `json:"data"`
+}
+
+func (c *UserServiceClient) FindUserIDByEmail(email string) (string, error) {
+	resp, err := c.httpClient.Get(
+		fmt.Sprintf("%s/api/v1/internal/users/lookup?email=%s", c.baseURL, url.QueryEscape(email)),
+	)
+	if err != nil {
+		return "", fmt.Errorf("calling user-service lookup: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("target user not found")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status %d from user-service lookup", resp.StatusCode)
+	}
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var result lookupByEmailResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("parsing lookup response: %w", err)
+	}
+	return result.Data.UserID, nil
 }
 
 func (c *UserServiceClient) ExistsByID(userID string) (bool, error) {

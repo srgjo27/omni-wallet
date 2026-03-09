@@ -83,8 +83,6 @@ func (r *TransactionRepository) UpdateStatus(ctx context.Context, id string, sta
 	return nil
 }
 
-// ListByWalletID returns a paginated list of transactions where the wallet is
-// either source or target. Returns ([]*Transaction, total count, error).
 func (r *TransactionRepository) ListByWalletID(ctx context.Context, walletID string, page, limit int) ([]*domain.Transaction, int, error) {
 	db := extractDB(ctx, r.db)
 
@@ -111,4 +109,16 @@ func (r *TransactionRepository) ListByWalletID(ctx context.Context, walletID str
 	}
 
 	return transactions, total, nil
+}
+
+func (r *TransactionRepository) GetAdminStats(ctx context.Context) (totalTx int, totalVolume int64, err error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(amount), 0)
+		FROM transactions
+		WHERE status = 'SUCCESS'
+	`)
+	if err := row.Scan(&totalTx, &totalVolume); err != nil {
+		return 0, 0, fmt.Errorf("querying transaction stats: %w", err)
+	}
+	return totalTx, totalVolume, nil
 }

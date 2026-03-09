@@ -7,7 +7,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// RedisConfig holds the parameters needed to connect to Redis.
 type RedisConfig struct {
 	Host     string
 	Port     string
@@ -15,7 +14,6 @@ type RedisConfig struct {
 	DB       int
 }
 
-// NewRedisClient creates and verifies a Redis client connection.
 func NewRedisClient(cfg RedisConfig) (*redis.Client, error) {
 	client := redis.NewClient(&redis.Options{
 		Addr:     fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),

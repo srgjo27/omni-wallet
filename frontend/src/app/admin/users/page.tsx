@@ -2,6 +2,7 @@
 
 import useSWR from "swr";
 import { apiClient } from "@/infrastructure/api/client";
+import { authApi } from "@/infrastructure/api/auth.api";
 import { UserTable } from "@/components/features/admin/UserTable";
 import { Spinner } from "@/components/ui/Spinner";
 import type { User } from "@/domain/models/auth.types";
@@ -20,7 +21,13 @@ async function fetcher(url: string): Promise<AdminUsersResponse> {
 }
 
 export default function AdminUsersPage() {
-  const { data, isLoading, error } = useSWR("/api/v1/users", fetcher);
+  const { data, isLoading, error, mutate } = useSWR("/api/v1/users", fetcher);
+
+  const handleVerify = async (userId: string) => {
+    await authApi.adminVerifyKyc(userId);
+    // Revalidate the user list so the badge updates immediately
+    await mutate();
+  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -38,7 +45,7 @@ export default function AdminUsersPage() {
           Gagal memuat data pengguna.
         </p>
       )}
-      {data && <UserTable users={data.users} />}
+      {data && <UserTable users={data.users} onVerify={handleVerify} />}
     </div>
   );
 }

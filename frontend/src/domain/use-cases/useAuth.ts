@@ -5,14 +5,14 @@ import { useRouter } from "next/navigation";
 import { authApi } from "@/infrastructure/api/auth.api";
 import { useAuthStore } from "@/store/auth.store";
 import { ApiError } from "@/infrastructure/api/client";
-import type { LoginRequest, RegisterRequest, SetPinRequest } from "@/domain/models/auth.types";
+import type { LoginRequest, RegisterRequest, SetPinRequest, UpdateKycRequest } from "@/domain/models/auth.types";
 
 /**
  * Custom hook encapsulating authentication logic.
  * Components stay thin — they only call actions and read state.
  */
 export function useAuth() {
-  const { user, isAuthenticated, setAuth, clearAuth } = useAuthStore();
+  const { user, isAuthenticated, setAuth, clearAuth, updateUser } = useAuthStore();
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,9 +58,27 @@ export function useAuth() {
     setError(null);
     try {
       await authApi.setPin(data);
+      updateUser({ has_pin: true });
       return true;
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to set PIN");
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const updateKyc = async (data: UpdateKycRequest) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      await authApi.updateKyc(data);
+      // Optimistically reflect PENDING status — the real value will be re-fetched
+      // on next profile load but this keeps the UI responsive immediately.
+      updateUser({ kyc_status: "PENDING" });
+      return true;
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Gagal mengajukan KYC");
       return false;
     } finally {
       setIsLoading(false);
@@ -76,5 +94,5 @@ export function useAuth() {
     }
   };
 
-  return { user, isAuthenticated, isLoading, error, login, register, setPin, logout, clearError };
+  return { user, isAuthenticated, isLoading, error, login, register, setPin, updateKyc, logout, clearError };
 }

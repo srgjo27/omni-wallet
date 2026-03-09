@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useTransfer } from "@/domain/use-cases/useTransfer";
+import { useAuthStore } from "@/store/auth.store";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -9,7 +11,9 @@ import { formatCurrency } from "@/lib/format";
 
 export function TransferForm() {
   const { transfer } = useTransfer();
-  const [targetUserId, setTargetUserId] = useState("");
+  const user = useAuthStore((s) => s.user);
+  const hasPin = user?.has_pin ?? false;
+  const [targetEmail, setTargetEmail] = useState("");
   const [amount, setAmount] = useState("");
   const [pin, setPin] = useState("");
   const [description, setDescription] = useState("");
@@ -22,15 +26,17 @@ export function TransferForm() {
     setError(null);
     setSuccess(null);
     const numAmount = Number(amount);
-    if (!targetUserId.trim()) return setError("ID penerima wajib diisi.");
+    if (!targetEmail.trim()) return setError("Email penerima wajib diisi.");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(targetEmail.trim()))
+      return setError("Format email tidak valid.");
     if (!numAmount || numAmount < 1_000) return setError("Minimum transfer adalah Rp1.000");
     if (pin.length !== 6) return setError("PIN harus 6 digit.");
 
     setIsLoading(true);
     try {
-      await transfer(targetUserId.trim(), numAmount, pin, description);
+      await transfer(targetEmail.trim(), numAmount, pin, description);
       setSuccess(`Transfer ${formatCurrency(numAmount)} berhasil!`);
-      setTargetUserId("");
+      setTargetEmail("");
       setAmount("");
       setPin("");
       setDescription("");
@@ -47,14 +53,24 @@ export function TransferForm() {
         <CardTitle>Transfer ke Pengguna</CardTitle>
       </CardHeader>
 
+      {!hasPin && (
+        <div className="mx-5 mb-4 rounded-md border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
+          Anda belum membuat PIN transaksi.{" "}
+          <Link href="/dashboard/profile" className="font-semibold underline hover:text-yellow-900">
+            Buat PIN sekarang
+          </Link>{" "}
+          sebelum melakukan transfer.
+        </div>
+      )}
+
       <form onSubmit={handleTransfer} className="flex flex-col gap-4 px-5 pb-5">
         <Input
-          label="ID Pengguna Tujuan"
-          type="text"
-          value={targetUserId}
-          onChange={(e) => setTargetUserId(e.target.value)}
-          placeholder="user-uuid-..."
-          hint="Masukkan UUID akun tujuan"
+          label="Email Penerima"
+          type="email"
+          value={targetEmail}
+          onChange={(e) => setTargetEmail(e.target.value)}
+          placeholder="penerima@email.com"
+          hint="Masukkan alamat email akun tujuan"
           required
         />
 
@@ -99,7 +115,7 @@ export function TransferForm() {
           </p>
         )}
 
-        <Button type="submit" isLoading={isLoading} className="w-full">
+        <Button type="submit" isLoading={isLoading} disabled={!hasPin} className="w-full">
           Kirim Transfer
         </Button>
       </form>
