@@ -7,10 +7,6 @@ import { ApiError } from "@/infrastructure/api/client";
 import type { Transaction, VirtualAccountResponse } from "@/domain/models/transaction.types";
 import { useAuthStore } from "@/store/auth.store";
 
-/**
- * Custom hook encapsulating top-up and P2P transfer logic.
- * Generates reference_no automatically using UUID v4 to ensure idempotency.
- */
 export function useTransfer() {
   const { user } = useAuthStore();
   const [isLoading, setIsLoading] = useState(false);
@@ -44,10 +40,6 @@ export function useTransfer() {
     }
   };
 
-  /**
-   * Creates or retrieves a Xendit Fixed Virtual Account for the given bank.
-   * The name is taken from the authenticated user's profile.
-   */
   const requestVA = async (bankCode: string) => {
     if (!user) return null;
     setIsLoading(true);
@@ -70,10 +62,6 @@ export function useTransfer() {
     }
   };
 
-  /**
-   * Simulates a Xendit VA payment — triggers the same wallet-credit
-   * pipeline as a real Xendit callback. Only works in non-production.
-   */
   const simulatePayment = async (va: VirtualAccountResponse, amount: number) => {
     setIsLoading(true);
     setError(null);

@@ -8,7 +8,6 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
 import { formatCurrency } from "@/lib/format";
 import type { VirtualAccountResponse } from "@/domain/models/transaction.types";
 
-// Bank options available via Xendit Fixed VA
 const BANKS = [
   { code: "BNI", label: "Bank BNI" },
   { code: "MANDIRI", label: "Bank Mandiri" },
@@ -22,7 +21,6 @@ const quickAmounts = [50_000, 100_000, 200_000, 500_000];
 export function TopupForm() {
   const { requestVA, simulatePayment, isLoading, error, clearError } = useTransfer();
 
-  // Step 1: choose bank → Step 2: show VA details + simulate
   const [step, setStep] = useState<1 | 2>(1);
   const [selectedBank, setSelectedBank] = useState<string>("");
   const [va, setVA] = useState<VirtualAccountResponse | null>(null);
@@ -30,7 +28,6 @@ export function TopupForm() {
   const [simSuccess, setSimSuccess] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  // ── Step 1: get / create VA ──────────────────────────────────────────────
   const handleRequestVA = async (e: React.FormEvent) => {
     e.preventDefault();
     clearError();
@@ -43,7 +40,6 @@ export function TopupForm() {
     }
   };
 
-  // ── Step 2: simulate payment ──────────────────────────────────────────────
   const handleSimulate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!va) return;
@@ -73,9 +69,6 @@ export function TopupForm() {
     clearError();
   };
 
-  // ════════════════════════════════════════════════
-  // STEP 1 — Choose bank
-  // ════════════════════════════════════════════════
   if (step === 1) {
     return (
       <Card>
@@ -89,7 +82,6 @@ export function TopupForm() {
             VA bersifat permanen — kamu bisa top-up berulang kali ke nomor yang sama.
           </p>
 
-          {/* Bank selector */}
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {BANKS.map(({ code, label }) => (
               <button
@@ -126,9 +118,6 @@ export function TopupForm() {
     );
   }
 
-  // ════════════════════════════════════════════════
-  // STEP 2 — Show VA + simulate payment
-  // ════════════════════════════════════════════════
   return (
     <Card>
       <CardHeader>
@@ -136,7 +125,6 @@ export function TopupForm() {
       </CardHeader>
 
       <div className="flex flex-col gap-5 px-5 pb-5">
-        {/* VA details */}
         {va && (
           <div className="rounded-xl bg-indigo-50 p-4">
             <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-indigo-500">
@@ -163,10 +151,9 @@ export function TopupForm() {
           </div>
         )}
 
-        {/* Simulate payment (dev / test mode only) */}
         <div className="rounded-xl border border-dashed border-amber-300 bg-amber-50 p-4">
           <p className="mb-3 text-xs font-semibold text-amber-700">
-            🛠️ Mode Test — Simulasikan Pembayaran
+            Mode Test — Simulasikan Pembayaran
           </p>
 
           <form onSubmit={handleSimulate} className="flex flex-col gap-3">
