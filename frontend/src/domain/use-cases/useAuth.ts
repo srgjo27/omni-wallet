@@ -7,10 +7,6 @@ import { useAuthStore } from "@/store/auth.store";
 import { ApiError } from "@/infrastructure/api/client";
 import type { LoginRequest, RegisterRequest, SetPinRequest, UpdateKycRequest } from "@/domain/models/auth.types";
 
-/**
- * Custom hook encapsulating authentication logic.
- * Components stay thin — they only call actions and read state.
- */
 export function useAuth() {
   const { user, isAuthenticated, setAuth, clearAuth, updateUser } = useAuthStore();
   const router = useRouter();
@@ -26,7 +22,6 @@ export function useAuth() {
       const res = await authApi.login(credentials);
       if (res.data) {
         setAuth(res.data.access_token, res.data.user);
-        // Route based on role — admin email convention used as a simple guard
         if (res.data.user.email.endsWith("@admin.omniwallet")) {
           router.push("/admin");
         } else {
@@ -73,8 +68,6 @@ export function useAuth() {
     setError(null);
     try {
       await authApi.updateKyc(data);
-      // Optimistically reflect PENDING status — the real value will be re-fetched
-      // on next profile load but this keeps the UI responsive immediately.
       updateUser({ kyc_status: "PENDING" });
       return true;
     } catch (err) {

@@ -29,26 +29,29 @@ type jwtClaims struct {
 }
 
 type UserService struct {
-	userRepo         ports.UserRepository
-	cacheRepo        ports.UserCacheRepository
+	userRepo          ports.UserRepository
+	cacheRepo         ports.UserCacheRepository
 	walletProvisioner ports.WalletProvisioner
-	jwtSecret        string
-	jwtTTL           time.Duration
+	eventPublisher    ports.UserEventPublisher
+	jwtSecret         string
+	jwtTTL            time.Duration
 }
 
 func NewUserService(
 	userRepo ports.UserRepository,
 	cacheRepo ports.UserCacheRepository,
 	walletProvisioner ports.WalletProvisioner,
+	eventPublisher ports.UserEventPublisher,
 	jwtSecret string,
 	jwtTTL time.Duration,
 ) *UserService {
 	return &UserService{
-		userRepo:         userRepo,
-		cacheRepo:        cacheRepo,
+		userRepo:          userRepo,
+		cacheRepo:         cacheRepo,
 		walletProvisioner: walletProvisioner,
-		jwtSecret:        jwtSecret,
-		jwtTTL:           jwtTTL,
+		eventPublisher:    eventPublisher,
+		jwtSecret:         jwtSecret,
+		jwtTTL:            jwtTTL,
 	}
 }
 
@@ -82,7 +85,22 @@ func (s *UserService) RegisterUser(ctx context.Context, req domain.RegisterReque
 		return nil, fmt.Errorf("persisting new user: %w", err)
 	}
 
-	if s.walletProvisioner != nil {
+	if s.eventPublisher != nil {
+		evt := domain.UserOutboundEvent{
+			EventType:  domain.UserEventRegistered,
+			UserID:     created.ID,
+			Email:      created.Email,
+			OccurredAt: created.CreatedAt,
+		}
+		if pubErr := s.eventPublisher.Publish(ctx, evt); pubErr != nil {
+			fmt.Printf("[WARN] RegisterUser: failed to publish USER_REGISTERED event for user_id=%s: %v\n", created.ID, pubErr)
+			if s.walletProvisioner != nil {
+				if wErr := s.walletProvisioner.ProvisionWallet(ctx, created.ID); wErr != nil {
+					fmt.Printf("[WARN] RegisterUser: fallback provision also failed for user_id=%s: %v\n", created.ID, wErr)
+				}
+			}
+		}
+	} else if s.walletProvisioner != nil {
 		if wErr := s.walletProvisioner.ProvisionWallet(ctx, created.ID); wErr != nil {
 			fmt.Printf("[WARN] RegisterUser: failed to provision wallet for user_id=%s: %v\n", created.ID, wErr)
 		}

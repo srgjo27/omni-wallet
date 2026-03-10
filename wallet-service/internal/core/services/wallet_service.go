@@ -63,6 +63,14 @@ func (s *WalletService) CreateWallet(ctx context.Context, req domain.CreateWalle
 	return created, nil
 }
 
+func (s *WalletService) ProvisionWalletForUser(ctx context.Context, userID string) error {
+	_, err := s.CreateWallet(ctx, domain.CreateWalletRequest{UserID: userID})
+	if err != nil && !errors.Is(err, ErrWalletAlreadyExists) {
+		return err
+	}
+	return nil
+}
+
 func (s *WalletService) AdminGetStats(ctx context.Context) (totalTx int, totalVolume int64, err error) {
 	return s.txRepo.GetAdminStats(ctx)
 }

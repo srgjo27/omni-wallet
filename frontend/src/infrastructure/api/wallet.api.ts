@@ -8,22 +8,18 @@ import type { TransactionHistoryResponse } from "@/domain/models/transaction.typ
 const WALLET_BASE = "/api/v1/wallets";
 
 export const walletApi = {
-  /** Returns the authenticated user's current wallet balance. */
   getBalance: () => apiClient.get<BalanceResponse>(`${WALLET_BASE}/balance`),
 
-  /** Returns a paginated list of wallet mutations (ledger entries). */
   getMutations: (page = 1, pageSize = 10) =>
     apiClient.get<MutationListResponse>(
       `${WALLET_BASE}/mutations?page=${page}&page_size=${pageSize}`,
     ),
 
-  /** Returns a paginated list of transactions involving this wallet. */
   getTransactionHistory: (page = 1, pageSize = 10) =>
     apiClient.get<TransactionHistoryResponse>(
       `${WALLET_BASE}/transactions?page=${page}&page_size=${pageSize}`,
     ),
 
-  /** Admin: returns total successful transaction count and total volume. */
   adminGetWalletStats: () =>
     apiClient.get<{ total_transactions: number; total_volume: number }>(`${WALLET_BASE}/stats`),
 };

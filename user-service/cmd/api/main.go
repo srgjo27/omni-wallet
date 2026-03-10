@@ -12,9 +12,11 @@ import (
 	"github.com/gin-gonic/gin"
 
 	userhttp "github.com/omni-wallet/user-service/internal/adapter/handler/http"
+	rabbitmqpub "github.com/omni-wallet/user-service/internal/adapter/messaging/rabbitmq"
 	mysqlrepo "github.com/omni-wallet/user-service/internal/adapter/repository/mysql"
 	redisrepo "github.com/omni-wallet/user-service/internal/adapter/repository/redis"
 	"github.com/omni-wallet/user-service/internal/adapter/walletclient"
+	"github.com/omni-wallet/user-service/internal/core/ports"
 	"github.com/omni-wallet/user-service/internal/core/services"
 	"github.com/omni-wallet/user-service/internal/platform/config"
 	"github.com/omni-wallet/user-service/internal/platform/database"
@@ -63,7 +65,19 @@ func main() {
 	wClient := walletclient.New(cfg.Wallet.ServiceBaseURL)
 	log.Printf("[INFO] Wallet service URL: %s", cfg.Wallet.ServiceBaseURL)
 
-	userService := services.NewUserService(userRepo, cacheRepo, wClient, cfg.JWT.Secret, cfg.JWT.TTL)
+	var eventPublisher ports.UserEventPublisher
+	if cfg.RabbitMQ.Enabled {
+		pub, err := rabbitmqpub.NewUserEventPublisher(cfg.RabbitMQ.URL, cfg.RabbitMQ.ExchangeName)
+		if err != nil {
+			log.Printf("[WARN] RabbitMQ not available, falling back to sync wallet provisioning: %v", err)
+		} else {
+			defer pub.Close()
+			eventPublisher = pub
+			log.Println("[INFO] Connected to RabbitMQ — async wallet provisioning enabled")
+		}
+	}
+
+	userService := services.NewUserService(userRepo, cacheRepo, wClient, eventPublisher, cfg.JWT.Secret, cfg.JWT.TTL)
 
 	userHandler := userhttp.NewUserHandler(userService)
 

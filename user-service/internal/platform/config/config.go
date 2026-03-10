@@ -15,6 +15,13 @@ type Config struct {
 	Redis    RedisConfig
 	JWT      JWTConfig
 	Wallet   WalletConfig
+	RabbitMQ RabbitMQConfig
+}
+
+type RabbitMQConfig struct {
+	URL          string
+	ExchangeName string
+	Enabled      bool
 }
 
 type AppConfig struct {
@@ -117,6 +124,11 @@ func Load() (*Config, error) {
 		},
 		Wallet: WalletConfig{
 			ServiceBaseURL: getEnvOrDefault("WALLET_SERVICE_BASE_URL", "http://wallet-service:8082"),
+		},
+		RabbitMQ: RabbitMQConfig{
+			URL:          getEnvOrDefault("RABBITMQ_URL", ""),
+			ExchangeName: getEnvOrDefault("RABBITMQ_EXCHANGE", "omni.events"),
+			Enabled:      getEnvOrDefault("RABBITMQ_URL", "") != "",
 		},
 	}
 

@@ -73,6 +73,22 @@ func main() {
 	}
 
 	walletService := services.NewWalletService(walletRepo, mutationRepo, txRepo)
+
+	if cfg.RabbitMQ.Enabled {
+		userConsumer, err := rabbitmqpub.NewUserEventConsumer(cfg.RabbitMQ.URL, cfg.RabbitMQ.ExchangeName, walletService)
+		if err != nil {
+			log.Printf("[WARN] USER_REGISTERED consumer unavailable: %v — wallet provisioning falls back to sync HTTP", err)
+		} else {
+			defer userConsumer.Close()
+			go func() {
+				if err := userConsumer.Consume(); err != nil {
+					log.Printf("[WARN] USER_REGISTERED consumer stopped: %v", err)
+				}
+			}()
+			log.Println("[INFO] USER_REGISTERED consumer started — async wallet provisioning active")
+		}
+	}
+
 	transferService := services.NewTransferService(
 		walletRepo,
 		txRepo,

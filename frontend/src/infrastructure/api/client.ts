@@ -1,11 +1,3 @@
-// Base HTTP client for all API calls.
-// All requests are routed through the Next.js rewrite proxy → API Gateway → microservices.
-//
-// IMPORTANT: base URL must be "" (empty) so browser requests go to relative paths like
-// /api/v1/... — Next.js intercepts them server-side and rewrites to the actual API Gateway
-// URL (configured in next.config.ts). Using NEXT_PUBLIC_API_URL here would embed the
-// Docker-internal hostname (api-gateway:8080) into the JS bundle, causing ERR_NAME_NOT_RESOLVED
-// in the browser.
 const API_BASE_URL = "";
 
 export interface ApiResponse<T = unknown> {
@@ -26,20 +18,11 @@ class ApiError extends Error {
   }
 }
 
-/**
- * Reads the JWT token from localStorage.
- * Returns null when called server-side (no window object).
- */
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem("omni_token");
 }
 
-/**
- * Core fetch wrapper.
- * Automatically attaches the Bearer token and deserialises the response.
- * Throws ApiError for non-2xx responses.
- */
 async function request<T>(
   path: string,
   options: RequestInit = {},
